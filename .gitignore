@@ -1,0 +1,80 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+# Local Codex instructions
+AGENTS_tfm_video_zynq.md
+# Local work directory for generated tool projects
+work/
+
+# Logs and journals
+*.log
+*.jou
+*.str
+
+# Vivado generated directories
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+ip_user_files/
+xsim.dir/
+
+# Vivado generated files
+*.bit
+*.bin
+*.hwh
+*.xsa
+*.dcp
+*.rpt
+*.pb
+*.wdb
+*.wcfg
+*.ltx
+*.mcs
+*.prm
+
+# Vitis / SDK generated files
+.metadata/
+.settings/
+Debug/
+Release/
+_ide/
+*.elf
+*.map
+*.o
+*.a
+*.exe
+*.launch
+*.bsp/
+*.sdk/
+*.ide/
+
+# Vitis HLS / Vivado HLS generated outputs
+.autopilot/
+.apc/
+solution*/
+*_prj/
+*.xo
+csim/
+csynth/
+impl/
+syn/
+sim/
+
+# Python/cache helpers
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Keep intentional empty folders
+!.gitkeep
+!**/.gitkeep
