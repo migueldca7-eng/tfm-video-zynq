@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 module tpg_core #(
     parameter integer G_WIDTH  = 640,
     parameter integer G_HEIGHT = 480
@@ -11,18 +13,18 @@ module tpg_core #(
     input  wire [2:0]  pattern_select,
     input  wire [23:0] solid_color,
 
-    output reg  [23:0] pixel_rgb,
-    output reg         pixel_valid,
-    output reg         frame_start,
-    output reg         line_end,
+    output wire [23:0] pixel_rgb,
+    output wire        pixel_valid,
+    output wire        frame_start,
+    output wire        line_end,
 
     output reg  [15:0] x_pos,
     output reg  [15:0] y_pos
 );
 
-    localparam [2:0] PATTERN_BLACK          = 3'd0;
-    localparam [2:0] PATTERN_SOLID          = 3'd1;
-    localparam [2:0] PATTERN_VERTICAL_BARS  = 3'd2;
+    localparam [2:0] PATTERN_BLACK           = 3'd0;
+    localparam [2:0] PATTERN_SOLID           = 3'd1;
+    localparam [2:0] PATTERN_VERTICAL_BARS   = 3'd2;
     localparam [2:0] PATTERN_HORIZONTAL_GRAD = 3'd3;
 
     reg [23:0] next_pixel_rgb;
@@ -39,13 +41,13 @@ module tpg_core #(
 
             PATTERN_VERTICAL_BARS: begin
                 if (x_pos < (G_WIDTH / 4))
-                    next_pixel_rgb = 24'hFF0000; // rojo
+                    next_pixel_rgb = 24'hFF0000;
                 else if (x_pos < (G_WIDTH / 2))
-                    next_pixel_rgb = 24'h00FF00; // verde
+                    next_pixel_rgb = 24'h00FF00;
                 else if (x_pos < ((G_WIDTH * 3) / 4))
-                    next_pixel_rgb = 24'h0000FF; // azul
+                    next_pixel_rgb = 24'h0000FF;
                 else
-                    next_pixel_rgb = 24'hFFFFFF; // blanco
+                    next_pixel_rgb = 24'hFFFFFF;
             end
 
             PATTERN_HORIZONTAL_GRAD: begin
@@ -62,39 +64,29 @@ module tpg_core #(
         endcase
     end
 
+    assign pixel_rgb   = enable ? next_pixel_rgb : 24'h000000;
+    assign pixel_valid = enable;
+    assign frame_start = enable && (x_pos == 16'd0) && (y_pos == 16'd0);
+    assign line_end    = enable && (x_pos == G_WIDTH - 1);
+
     always @(posedge clk) begin
         if (rst) begin
-            x_pos       <= 16'd0;
-            y_pos       <= 16'd0;
-            pixel_rgb   <= 24'h000000;
-            pixel_valid <= 1'b0;
-            frame_start <= 1'b0;
-            line_end    <= 1'b0;
+            x_pos <= 16'd0;
+            y_pos <= 16'd0;
         end else begin
             if (!enable) begin
-                x_pos       <= 16'd0;
-                y_pos       <= 16'd0;
-                pixel_rgb   <= 24'h000000;
-                pixel_valid <= 1'b0;
-                frame_start <= 1'b0;
-                line_end    <= 1'b0;
-            end else begin
-                pixel_valid <= 1'b1;
-                pixel_rgb   <= next_pixel_rgb;
-                frame_start <= (x_pos == 0) && (y_pos == 0);
-                line_end    <= (x_pos == G_WIDTH - 1);
+                x_pos <= 16'd0;
+                y_pos <= 16'd0;
+            end else if (advance) begin
+                if (x_pos == G_WIDTH - 1) begin
+                    x_pos <= 16'd0;
 
-                if (advance) begin
-                    if (x_pos == G_WIDTH - 1) begin
-                        x_pos <= 16'd0;
-
-                        if (y_pos == G_HEIGHT - 1)
-                            y_pos <= 16'd0;
-                        else
-                            y_pos <= y_pos + 16'd1;
-                    end else begin
-                        x_pos <= x_pos + 16'd1;
-                    end
+                    if (y_pos == G_HEIGHT - 1)
+                        y_pos <= 16'd0;
+                    else
+                        y_pos <= y_pos + 16'd1;
+                end else begin
+                    x_pos <= x_pos + 16'd1;
                 end
             end
         end
