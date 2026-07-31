@@ -26,11 +26,15 @@ module tb_tpg_core;
     reg start_frame;
     reg [2:0] pattern_select;
     reg [23:0] solid_color;
+    reg [7:0] temporal_step;
 
     wire [23:0] pixel_rgb;
     wire        pixel_valid;
     wire        frame_start;
     wire        line_end;
+    wire        busy_out;
+    wire        frame_done;
+    wire [7:0]  frame_phase_out;
     wire [15:0] x_pos;
     wire [15:0] y_pos;
 
@@ -45,10 +49,14 @@ module tb_tpg_core;
         .start_frame(start_frame),
         .pattern_select(pattern_select),
         .solid_color(solid_color),
+        .temporal_step(temporal_step),
         .pixel_rgb(pixel_rgb),
         .pixel_valid(pixel_valid),
         .frame_start(frame_start),
         .line_end(line_end),
+        .busy_out(busy_out),
+        .frame_done(frame_done),
+        .frame_phase_out(frame_phase_out),
         .x_pos(x_pos),
         .y_pos(y_pos)
     );
@@ -153,6 +161,7 @@ module tb_tpg_core;
         reg [23:0] expected_rgb;
         reg expected_frame_start;
         reg expected_line_end;
+        reg expected_frame_done;
         begin
             expected_rgb = expected_pixel(
                 pattern_select,
@@ -163,6 +172,9 @@ module tb_tpg_core;
             );
             expected_frame_start = (expected_x == 0) && (expected_y == 0);
             expected_line_end = (expected_x == TB_WIDTH - 1);
+            expected_frame_done = expected_line_end &&
+                                  (expected_y == TB_HEIGHT - 1) &&
+                                  advance;
 
             if ((x_pos !== expected_x) || (y_pos !== expected_y)) begin
                 $display(
@@ -182,6 +194,24 @@ module tb_tpg_core;
                     pattern_select,
                     x_pos,
                     y_pos
+                );
+                $fatal;
+            end
+
+            if (busy_out !== 1'b1) begin
+                $display(
+                    "ERROR: busy_out is not asserted at x=%0d y=%0d",
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
+
+            if (frame_phase_out !== expected_phase) begin
+                $display(
+                    "ERROR: expected frame phase %0d, got %0d",
+                    expected_phase,
+                    frame_phase_out
                 );
                 $fatal;
             end
@@ -217,6 +247,17 @@ module tb_tpg_core;
                 );
                 $fatal;
             end
+
+            if (frame_done !== expected_frame_done) begin
+                $display(
+                    "ERROR: expected frame_done=%0b, got %0b at x=%0d y=%0d",
+                    expected_frame_done,
+                    frame_done,
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
         end
     endtask
 
@@ -225,6 +266,16 @@ module tb_tpg_core;
         begin
             if (pixel_valid !== 1'b0) begin
                 $display("ERROR: pixel_valid should be 0 while the core is idle");
+                $fatal;
+            end
+
+            if (busy_out !== 1'b0) begin
+                $display("ERROR: busy_out should be 0 while the core is idle");
+                $fatal;
+            end
+
+            if (frame_done !== 1'b0) begin
+                $display("ERROR: frame_done should be 0 while the core is idle");
                 $fatal;
             end
 
@@ -315,6 +366,8 @@ module tb_tpg_core;
     task run_temporal_pattern;
         integer pixel_index;
         begin
+            // Use a non-default step to verify configurable phase increments.
+            temporal_step = 8'd3;
             start_pattern(PATTERN_TEMPORAL_RAMP);
             advance = 1'b1;
 
@@ -360,7 +413,7 @@ module tb_tpg_core;
             tick;
             check_idle;
 
-            // Second temporal frame: phase 1.
+            // Second temporal frame: phase 3.
             request_frame;
             advance = 1'b1;
 
@@ -370,7 +423,7 @@ module tb_tpg_core;
                 check_current_pixel(
                     pixel_index % TB_WIDTH,
                     pixel_index / TB_WIDTH,
-                    8'd1
+                    8'd3
                 );
                 tick;
             end
@@ -378,7 +431,7 @@ module tb_tpg_core;
             advance = 1'b0;
             check_idle;
 
-            // Start phase 2, then disable the TPG during the frame.
+            // Start phase 6, then disable the TPG during the frame.
             // The active frame must still be completed.
             request_frame;
             advance = 1'b1;
@@ -389,7 +442,7 @@ module tb_tpg_core;
                 check_current_pixel(
                     pixel_index % TB_WIDTH,
                     pixel_index / TB_WIDTH,
-                    8'd2
+                    8'd6
                 );
                 tick;
             end
@@ -407,7 +460,7 @@ module tb_tpg_core;
                 check_current_pixel(
                     pixel_index % TB_WIDTH,
                     pixel_index / TB_WIDTH,
-                    8'd2
+                    8'd6
                 );
                 tick;
             end
@@ -429,6 +482,7 @@ module tb_tpg_core;
             enable = 1'b1;
             tick;
             check_current_pixel(0, 0, 8'd0);
+            temporal_step = 8'd1;
 
             // Return the DUT to an idle state before ending the test.
             rst = 1'b1;
@@ -447,6 +501,7 @@ module tb_tpg_core;
         start_frame = 1'b0;
         pattern_select = PATTERN_BLACK;
         solid_color = 24'hA5_5A_11;
+        temporal_step = 8'd1;
 
         tick;
         tick;

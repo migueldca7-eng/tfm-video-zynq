@@ -16,6 +16,7 @@ module tpg_core #(
     // Pattern configuration.
     input  wire [2:0]  pattern_select,
     input  wire [23:0] solid_color,
+    input  wire [7:0]  temporal_step,
 
     // Generated pixel stream and timing markers.
     output wire [23:0] pixel_rgb,
@@ -23,6 +24,12 @@ module tpg_core #(
     output wire        frame_start,
     output wire        line_end,
 
+    // Internal state exposed to the control wrapper.
+    output wire        busy_out,
+    output wire        frame_done,
+    output wire [7:0]  frame_phase_out,
+
+    // Current pixel coordinates, exposed for debugging.
     output reg  [15:0] x_pos,
     output reg  [15:0] y_pos
 );
@@ -139,9 +146,17 @@ module tpg_core #(
     assign enable_rise   = enable && !enable_previous;
     assign start_request = enable_rise || (enable && start_frame);
 
-    // Identifies the final pixel of the current frame.
+    // Identifies the final pixel coordinates of the current frame.
     assign last_pixel = (x_pos == G_WIDTH - 1) &&
                         (y_pos == G_HEIGHT - 1);
+
+    // Exposes the internal generator state to the wrapper.
+    assign busy_out        = busy;
+    assign frame_phase_out = frame_phase;
+
+    // Pulses for one clock cycle when the final pixel is transferred.
+    // Requiring advance guarantees that the downstream block accepted it.
+    assign frame_done = busy && advance && last_pixel;
 
     // The current pixel is valid only while a frame is being generated.
     assign pixel_rgb   = busy ? next_pixel_rgb : 24'h000000;
@@ -177,7 +192,7 @@ module tpg_core #(
                 // The complete frame has been accepted by the downstream block.
                 x_pos       <= 16'd0;
                 y_pos       <= 16'd0;
-                frame_phase <= frame_phase + 8'd1;
+                frame_phase <= frame_phase + temporal_step;
                 busy        <= 1'b0;
             end else if (x_pos == G_WIDTH - 1) begin
                 // End of the current line: return to its first column.
