@@ -2,14 +2,28 @@
 
 module tb_tpg_core;
 
-    localparam integer TB_WIDTH  = 4;
-    localparam integer TB_HEIGHT = 3;
+    // A 64x64 frame provides:
+    // - eight color bars, each eight pixels wide;
+    // - four checkerboard cells of 32x32 pixels;
+    // - crosshatch lines at coordinates 0 and 32.
+    localparam integer TB_WIDTH  = 64;
+    localparam integer TB_HEIGHT = 64;
     localparam integer TB_PIXELS = TB_WIDTH * TB_HEIGHT;
+
+    localparam [2:0] PATTERN_BLACK           = 3'd0;
+    localparam [2:0] PATTERN_SOLID           = 3'd1;
+    localparam [2:0] PATTERN_COLOR_BARS      = 3'd2;
+    localparam [2:0] PATTERN_HORIZONTAL_RAMP = 3'd3;
+    localparam [2:0] PATTERN_VERTICAL_RAMP   = 3'd4;
+    localparam [2:0] PATTERN_CHECKERBOARD    = 3'd5;
+    localparam [2:0] PATTERN_CROSSHATCH      = 3'd6;
+    localparam [2:0] PATTERN_TEMPORAL_RAMP   = 3'd7;
 
     reg clk;
     reg rst;
     reg enable;
     reg advance;
+    reg start_frame;
     reg [2:0] pattern_select;
     reg [23:0] solid_color;
 
@@ -20,8 +34,6 @@ module tb_tpg_core;
     wire [15:0] x_pos;
     wire [15:0] y_pos;
 
-    integer i;
-
     tpg_core #(
         .G_WIDTH(TB_WIDTH),
         .G_HEIGHT(TB_HEIGHT)
@@ -30,6 +42,7 @@ module tb_tpg_core;
         .rst(rst),
         .enable(enable),
         .advance(advance),
+        .start_frame(start_frame),
         .pattern_select(pattern_select),
         .solid_color(solid_color),
         .pixel_rgb(pixel_rgb),
@@ -52,15 +65,378 @@ module tb_tpg_core;
         end
     endtask
 
-    task check_position;
-        input [15:0] expected_x;
-        input [15:0] expected_y;
+    function [23:0] expected_pixel;
+        input [2:0]  pattern_value;
+        input integer x_value;
+        input integer y_value;
+        input [7:0]  phase_value;
+        input [23:0] solid_value;
         begin
-            if (x_pos !== expected_x || y_pos !== expected_y) begin
-                $display("ERROR: expected x=%0d y=%0d, got x=%0d y=%0d",
-                         expected_x, expected_y, x_pos, y_pos);
+            case (pattern_value)
+                PATTERN_BLACK: begin
+                    expected_pixel = 24'h000000;
+                end
+
+                PATTERN_SOLID: begin
+                    expected_pixel = solid_value;
+                end
+
+                PATTERN_COLOR_BARS: begin
+                    if (x_value < ((TB_WIDTH * 1) / 8))
+                        expected_pixel = 24'hFFFFFF;
+                    else if (x_value < ((TB_WIDTH * 2) / 8))
+                        expected_pixel = 24'hFFFF00;
+                    else if (x_value < ((TB_WIDTH * 3) / 8))
+                        expected_pixel = 24'h00FFFF;
+                    else if (x_value < ((TB_WIDTH * 4) / 8))
+                        expected_pixel = 24'h00FF00;
+                    else if (x_value < ((TB_WIDTH * 5) / 8))
+                        expected_pixel = 24'hFF00FF;
+                    else if (x_value < ((TB_WIDTH * 6) / 8))
+                        expected_pixel = 24'hFF0000;
+                    else if (x_value < ((TB_WIDTH * 7) / 8))
+                        expected_pixel = 24'h0000FF;
+                    else
+                        expected_pixel = 24'h000000;
+                end
+
+                PATTERN_HORIZONTAL_RAMP: begin
+                    expected_pixel = {
+                        x_value[7:0],
+                        x_value[7:0],
+                        x_value[7:0]
+                    };
+                end
+
+                PATTERN_VERTICAL_RAMP: begin
+                    expected_pixel = {
+                        y_value[7:0],
+                        y_value[7:0],
+                        y_value[7:0]
+                    };
+                end
+
+                PATTERN_CHECKERBOARD: begin
+                    if (((x_value / 32) % 2) == ((y_value / 32) % 2))
+                        expected_pixel = 24'hFFFFFF;
+                    else
+                        expected_pixel = 24'h000000;
+                end
+
+                PATTERN_CROSSHATCH: begin
+                    if (((x_value % 32) == 0) ||
+                        ((y_value % 32) == 0))
+                        expected_pixel = 24'hFFFFFF;
+                    else
+                        expected_pixel = 24'h000000;
+                end
+
+                PATTERN_TEMPORAL_RAMP: begin
+                    expected_pixel = {
+                        phase_value,
+                        phase_value,
+                        phase_value
+                    };
+                end
+
+                default: begin
+                    expected_pixel = 24'h000000;
+                end
+            endcase
+        end
+    endfunction
+
+    task check_current_pixel;
+        input integer expected_x;
+        input integer expected_y;
+        input [7:0] expected_phase;
+        reg [23:0] expected_rgb;
+        reg expected_frame_start;
+        reg expected_line_end;
+        begin
+            expected_rgb = expected_pixel(
+                pattern_select,
+                expected_x,
+                expected_y,
+                expected_phase,
+                solid_color
+            );
+            expected_frame_start = (expected_x == 0) && (expected_y == 0);
+            expected_line_end = (expected_x == TB_WIDTH - 1);
+
+            if ((x_pos !== expected_x) || (y_pos !== expected_y)) begin
+                $display(
+                    "ERROR: pattern=%0d expected x=%0d y=%0d, got x=%0d y=%0d",
+                    pattern_select,
+                    expected_x,
+                    expected_y,
+                    x_pos,
+                    y_pos
+                );
                 $fatal;
             end
+
+            if (pixel_valid !== 1'b1) begin
+                $display(
+                    "ERROR: pattern=%0d pixel_valid is not asserted at x=%0d y=%0d",
+                    pattern_select,
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
+
+            if (pixel_rgb !== expected_rgb) begin
+                $display(
+                    "ERROR: pattern=%0d mismatch at x=%0d y=%0d: expected %h, got %h",
+                    pattern_select,
+                    x_pos,
+                    y_pos,
+                    expected_rgb,
+                    pixel_rgb
+                );
+                $fatal;
+            end
+
+            if (frame_start !== expected_frame_start) begin
+                $display(
+                    "ERROR: pattern=%0d frame_start mismatch at x=%0d y=%0d",
+                    pattern_select,
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
+
+            if (line_end !== expected_line_end) begin
+                $display(
+                    "ERROR: pattern=%0d line_end mismatch at x=%0d y=%0d",
+                    pattern_select,
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
+        end
+    endtask
+
+    // Check that the core presents no valid video between frames.
+    task check_idle;
+        begin
+            if (pixel_valid !== 1'b0) begin
+                $display("ERROR: pixel_valid should be 0 while the core is idle");
+                $fatal;
+            end
+
+            if ((x_pos !== 16'd0) || (y_pos !== 16'd0)) begin
+                $display(
+                    "ERROR: idle coordinates should be (0,0), got (%0d,%0d)",
+                    x_pos,
+                    y_pos
+                );
+                $fatal;
+            end
+
+            if ((frame_start !== 1'b0) || (line_end !== 1'b0)) begin
+                $display("ERROR: video markers should be 0 while the core is idle");
+                $fatal;
+            end
+
+            if (pixel_rgb !== 24'h000000) begin
+                $display("ERROR: pixel_rgb should be black while the core is idle");
+                $fatal;
+            end
+        end
+    endtask
+
+    // Request one additional frame while enable remains asserted.
+    task request_frame;
+        begin
+            start_frame = 1'b1;
+            tick;
+            start_frame = 1'b0;
+
+            if (pixel_valid !== 1'b1) begin
+                $display("ERROR: start_frame did not start a new frame");
+                $fatal;
+            end
+        end
+    endtask
+
+    task start_pattern;
+        input [2:0] selected_pattern;
+        begin
+            // A low enable leaves the core idle and resets its temporal phase.
+            enable = 1'b0;
+            advance = 1'b0;
+            start_frame = 1'b0;
+            tick;
+
+            pattern_select = selected_pattern;
+            enable = 1'b1;
+            tick;
+
+            if (pixel_valid !== 1'b1) begin
+                $display("ERROR: enable rising edge did not start the first frame");
+                $fatal;
+            end
+        end
+    endtask
+
+    task run_static_pattern;
+        input [2:0] selected_pattern;
+        integer pixel_index;
+        begin
+            start_pattern(selected_pattern);
+            advance = 1'b1;
+
+            for (pixel_index = 0;
+                 pixel_index < TB_PIXELS;
+                 pixel_index = pixel_index + 1) begin
+                check_current_pixel(
+                    pixel_index % TB_WIDTH,
+                    pixel_index / TB_WIDTH,
+                    8'd0
+                );
+                tick;
+            end
+
+            advance = 1'b0;
+            check_idle;
+
+            // The core must not free-run while enable remains high.
+            tick;
+            check_idle;
+            tick;
+            check_idle;
+        end
+    endtask
+
+    task run_temporal_pattern;
+        integer pixel_index;
+        begin
+            start_pattern(PATTERN_TEMPORAL_RAMP);
+            advance = 1'b1;
+
+            // First temporal frame: phase 0.
+            for (pixel_index = 0;
+                 pixel_index < TB_PIXELS;
+                 pixel_index = pixel_index + 1) begin
+                check_current_pixel(
+                    pixel_index % TB_WIDTH,
+                    pixel_index / TB_WIDTH,
+                    8'd0
+                );
+
+                if (pixel_index == TB_PIXELS - 1) begin
+                    // Stall the final pixel. The position and temporal
+                    // phase must remain unchanged until it is accepted.
+                    advance = 1'b0;
+                    tick;
+                    check_current_pixel(
+                        TB_WIDTH - 1,
+                        TB_HEIGHT - 1,
+                        8'd0
+                    );
+
+                    tick;
+                    check_current_pixel(
+                        TB_WIDTH - 1,
+                        TB_HEIGHT - 1,
+                        8'd0
+                    );
+
+                    advance = 1'b1;
+                    tick;
+                end else begin
+                    tick;
+                end
+            end
+
+            advance = 1'b0;
+            check_idle;
+
+            // No second frame may start until start_frame is asserted.
+            tick;
+            check_idle;
+
+            // Second temporal frame: phase 1.
+            request_frame;
+            advance = 1'b1;
+
+            for (pixel_index = 0;
+                 pixel_index < TB_PIXELS;
+                 pixel_index = pixel_index + 1) begin
+                check_current_pixel(
+                    pixel_index % TB_WIDTH,
+                    pixel_index / TB_WIDTH,
+                    8'd1
+                );
+                tick;
+            end
+
+            advance = 1'b0;
+            check_idle;
+
+            // Start phase 2, then disable the TPG during the frame.
+            // The active frame must still be completed.
+            request_frame;
+            advance = 1'b1;
+
+            for (pixel_index = 0;
+                 pixel_index < 8;
+                 pixel_index = pixel_index + 1) begin
+                check_current_pixel(
+                    pixel_index % TB_WIDTH,
+                    pixel_index / TB_WIDTH,
+                    8'd2
+                );
+                tick;
+            end
+
+            enable = 1'b0;
+
+            if (pixel_valid !== 1'b1) begin
+                $display("ERROR: disabling the TPG aborted the active frame");
+                $fatal;
+            end
+
+            for (pixel_index = 8;
+                 pixel_index < TB_PIXELS;
+                 pixel_index = pixel_index + 1) begin
+                check_current_pixel(
+                    pixel_index % TB_WIDTH,
+                    pixel_index / TB_WIDTH,
+                    8'd2
+                );
+                tick;
+            end
+
+            advance = 1'b0;
+            check_idle;
+
+            // One idle disabled cycle resets the temporal phase.
+            tick;
+            check_idle;
+
+            // A frame pulse must be ignored while enable is low.
+            start_frame = 1'b1;
+            tick;
+            start_frame = 1'b0;
+            check_idle;
+
+            // Re-enabling starts again from temporal phase 0.
+            enable = 1'b1;
+            tick;
+            check_current_pixel(0, 0, 8'd0);
+
+            // Return the DUT to an idle state before ending the test.
+            rst = 1'b1;
+            tick;
+            rst = 1'b0;
+            enable = 1'b0;
+            tick;
+            check_idle;
         end
     endtask
 
@@ -68,8 +444,9 @@ module tb_tpg_core;
         rst = 1'b1;
         enable = 1'b0;
         advance = 1'b0;
-        pattern_select = 3'd1;
-        solid_color = 24'h123456;
+        start_frame = 1'b0;
+        pattern_select = PATTERN_BLACK;
+        solid_color = 24'hA5_5A_11;
 
         tick;
         tick;
@@ -82,74 +459,18 @@ module tb_tpg_core;
             $fatal;
         end
 
-        enable = 1'b1;
-        advance = 1'b0;
-        tick;
+        run_static_pattern(PATTERN_BLACK);
+        run_static_pattern(PATTERN_SOLID);
+        run_static_pattern(PATTERN_COLOR_BARS);
+        run_static_pattern(PATTERN_HORIZONTAL_RAMP);
+        run_static_pattern(PATTERN_VERTICAL_RAMP);
+        run_static_pattern(PATTERN_CHECKERBOARD);
+        run_static_pattern(PATTERN_CROSSHATCH);
+        run_temporal_pattern;
 
-        check_position(16'd0, 16'd0);
-
-        if (pixel_valid !== 1'b1) begin
-            $display("ERROR: pixel_valid should be 1 when enabled");
-            $fatal;
-        end
-
-        if (frame_start !== 1'b1) begin
-            $display("ERROR: frame_start should be 1 at first pixel");
-            $fatal;
-        end
-
-        if (line_end !== 1'b0) begin
-            $display("ERROR: line_end should be 0 at x=0");
-            $fatal;
-        end
-
-        if (pixel_rgb !== 24'h123456) begin
-            $display("ERROR: solid color pattern mismatch");
-            $fatal;
-        end
-
-        advance = 1'b1;
-
-        for (i = 0; i < TB_PIXELS; i = i + 1) begin
-            check_position(i % TB_WIDTH, i / TB_WIDTH);
-
-            if ((i == 0) && (frame_start !== 1'b1)) begin
-                $display("ERROR: frame_start missing at first pixel");
-                $fatal;
-            end
-
-            if ((i != 0) && (frame_start !== 1'b0)) begin
-                $display("ERROR: frame_start asserted outside first pixel");
-                $fatal;
-            end
-
-            if (((i % TB_WIDTH) == (TB_WIDTH - 1)) && (line_end !== 1'b1)) begin
-                $display("ERROR: line_end missing at end of line, i=%0d", i);
-                $fatal;
-            end
-
-            if (((i % TB_WIDTH) != (TB_WIDTH - 1)) && (line_end !== 1'b0)) begin
-                $display("ERROR: line_end asserted before end of line, i=%0d", i);
-                $fatal;
-            end
-
-            tick;
-        end
-
-        check_position(16'd0, 16'd0);
-
-        advance = 1'b0;
-        tick;
-        check_position(16'd0, 16'd0);
-
-        tick;
-        check_position(16'd0, 16'd0);
-
-        advance = 1'b1;
-        tick;
-        check_position(16'd1, 16'd0);
-
-        $display("TB PASSED: tpg_core basic timing checks passed");
+        $display(
+            "TB PASSED: tpg_core patterns, pacing, backpressure and enable checks passed"
+        );
         $finish;
     end
 

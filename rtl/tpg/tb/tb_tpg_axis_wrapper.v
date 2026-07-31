@@ -11,6 +11,7 @@ module tb_tpg_axis_wrapper;
     reg clk;
     reg rst;
     reg enable;
+    reg frame_sync_async;
 
     reg [2:0]  pattern_select;
     reg [23:0] solid_color;
@@ -32,6 +33,7 @@ module tb_tpg_axis_wrapper;
     ) dut (
         .clk(clk),
         .rst(rst),
+        .frame_sync_async(frame_sync_async),
         .enable(enable),
         .pattern_select(pattern_select),
         .solid_color(solid_color),
@@ -91,9 +93,45 @@ module tb_tpg_axis_wrapper;
         end
     endtask
 
+    // Check that no AXI4-Stream transfer is offered between frames.
+    task check_idle;
+        begin
+            if (m_axis_video_tvalid !== 1'b0) begin
+                $display("ERROR: TVALID should be 0 while the wrapper is idle");
+                $fatal;
+            end
+
+            if ((m_axis_video_tuser !== 1'b0) ||
+                (m_axis_video_tlast !== 1'b0)) begin
+                $display("ERROR: TUSER and TLAST should be 0 while idle");
+                $fatal;
+            end
+
+            check_position(16'd0, 16'd0);
+        end
+    endtask
+
+    // Hold the asynchronous VTC pulse long enough to cross the synchronizer.
+    // The core sees one frame request after the two synchronization stages.
+    task pulse_frame_sync;
+        begin
+            frame_sync_async = 1'b1;
+            tick;
+            tick;
+            frame_sync_async = 1'b0;
+            tick;
+
+            if (m_axis_video_tvalid !== 1'b1) begin
+                $display("ERROR: synchronized frame pulse did not start a frame");
+                $fatal;
+            end
+        end
+    endtask
+
     initial begin
         rst = 1'b1;
         enable = 1'b0;
+        frame_sync_async = 1'b0;
         pattern_select = 3'd1;
         solid_color = 24'hA5_5A_11;
         m_axis_video_tready = 1'b0;
@@ -162,22 +200,90 @@ module tb_tpg_axis_wrapper;
             tick;
         end
 
-        // After one full frame, coordinates wrap back to the first pixel.
-        check_position(16'd0, 16'd0);
-        check_axis_flags(1'b1, 1'b0);
+        // After one full frame, the wrapper must become idle instead of
+        // immediately generating another frame.
+        check_idle;
+        tick;
+        check_idle;
+        tick;
+        check_idle;
 
-        // Another backpressure check, now after frame wrap.
+        // A synchronized VTC pulse starts exactly one additional frame.
         m_axis_video_tready = 1'b0;
+        pulse_frame_sync;
+        check_position(16'd0, 16'd0);
+        check_axis_flags(1'b1, 1'b0);
+
+        // Keep the first pixel stalled after synchronization.
         tick;
         check_position(16'd0, 16'd0);
         check_axis_flags(1'b1, 1'b0);
 
-        // Releasing backpressure should allow the next pixel to be consumed.
+        // Consume the complete synchronized frame.
         m_axis_video_tready = 1'b1;
-        tick;
-        check_position(16'd1, 16'd0);
 
-        $display("TB PASSED: tpg_axis_wrapper AXI handshake checks passed");
+        for (i = 0; i < TB_PIXELS; i = i + 1) begin
+            check_position(i % TB_WIDTH, i / TB_WIDTH);
+            check_axis_flags(
+                (i == 0),
+                ((i % TB_WIDTH) == (TB_WIDTH - 1))
+            );
+
+            if (m_axis_video_tvalid !== 1'b1) begin
+                $display("ERROR: TVALID deasserted during synchronized frame");
+                $fatal;
+            end
+
+            tick;
+        end
+
+        check_idle;
+
+        // Start another frame and disable the TPG after four accepted pixels.
+        // The remaining pixels must still be transferred.
+        m_axis_video_tready = 1'b0;
+        pulse_frame_sync;
+        m_axis_video_tready = 1'b1;
+
+        for (i = 0; i < 4; i = i + 1) begin
+            check_position(i % TB_WIDTH, i / TB_WIDTH);
+            check_axis_flags(
+                (i == 0),
+                ((i % TB_WIDTH) == (TB_WIDTH - 1))
+            );
+            tick;
+        end
+
+        enable = 1'b0;
+
+        if (m_axis_video_tvalid !== 1'b1) begin
+            $display("ERROR: enable low aborted an active AXI frame");
+            $fatal;
+        end
+
+        for (i = 4; i < TB_PIXELS; i = i + 1) begin
+            check_position(i % TB_WIDTH, i / TB_WIDTH);
+            check_axis_flags(
+                1'b0,
+                ((i % TB_WIDTH) == (TB_WIDTH - 1))
+            );
+            tick;
+        end
+
+        check_idle;
+
+        // A synchronized frame pulse must be ignored while enable is low.
+        frame_sync_async = 1'b1;
+        tick;
+        tick;
+        frame_sync_async = 1'b0;
+        tick;
+        tick;
+        check_idle;
+
+        $display(
+            "TB PASSED: wrapper synchronization, pacing and AXI checks passed"
+        );
         $finish;
     end
 

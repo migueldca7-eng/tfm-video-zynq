@@ -1063,6 +1063,7 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net RESETCAM_gpio_io_o [get_bd_ports RESETCAM] [get_bd_pins RESETCAM/gpio_io_o]
   connect_bd_net -net SOLID_COLOR_dout [get_bd_pins SOLID_COLOR/dout] [get_bd_pins tpg_axis_wrapper_0/solid_color]
   connect_bd_net -net VCC_dout [get_bd_pins VCC/dout] [get_bd_pins tpg_axis_wrapper_0/enable] [get_bd_pins v_axi4s_vid_out_0/aclken] [get_bd_pins v_axi4s_vid_out_0/vid_io_out_ce] [get_bd_pins v_tc_0/clken] [get_bd_pins v_tc_0/gen_clken]
+  connect_bd_net -net v_tc_0_fsync_out [get_bd_pins v_tc_0/fsync_out] [get_bd_pins tpg_axis_wrapper_0/frame_sync_async]
   connect_bd_net -net axi_vdma_0_mm2s_introut [get_bd_pins axi_vdma_0/mm2s_introut] [get_bd_pins xlconcat_1/In0]
   connect_bd_net -net axi_vdma_0_s2mm_introut [get_bd_pins axi_vdma_0/s2mm_introut] [get_bd_pins xlconcat_1/In1]
   connect_bd_net -net clk_in1_0_1 [get_bd_ports CLK_I] [get_bd_pins clk_wiz_0/clk_in1]
