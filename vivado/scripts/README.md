@@ -1,44 +1,81 @@
 # Reconstrucción del proyecto Vivado
 
-Este directorio contiene el script necesario para reconstruir el proyecto
+Este directorio contiene el script Tcl necesario para reconstruir el proyecto
 Vivado de la plataforma de vídeo sin versionar el proyecto generado completo.
 
-El diseño corresponde a la versión validada en la Zybo Z7-10, mostrando
-cuatro barras verticales mediante la cadena:
+El diseño ha sido reconstruido, sintetizado, implementado y validado sobre una
+Zybo Z7-10 utilizando Vivado 2019.1.
+
+## Arquitectura reconstruida
+
+La cadena de vídeo es:
 
 ```text
-TPG propio -> AXI4-Stream -> AXI VDMA -> DDR -> AXI VDMA
-           -> AXI4-Stream to Video Out -> HDMI TX -> Monitor
+TPG propio
+  -> AXI4-Stream
+  -> AXI VDMA S2MM
+  -> DDR del Zynq
+  -> AXI VDMA MM2S
+  -> AXI4-Stream to Video Out
+  -> HDMI TX
+  -> Monitor
 ```
+
+La configuración del TPG sigue el camino:
+
+```text
+PS M_AXI_GP0
+  -> AXI Interconnect
+  -> AXI4-Lite del TPG
+```
+
+El TPG recibe además la señal `fsync_out` del Video Timing Controller. Esta
+señal se sincroniza internamente antes de utilizarse como referencia para
+comenzar un nuevo frame.
+
+## Configuración actual
+
+- Dispositivo: `xc7z010clg400-1`.
+- Resolución: 640 × 480.
+- Formato de vídeo: RGB888.
+- Reloj AXI, VDMA y TPG: FCLK0 del PS.
+- Reloj de píxel: 25 MHz.
+- Tres frame stores en el AXI VDMA.
+- Puerto HP0 del PS para acceder a la DDR.
+- Puerto GP0 del PS para controlar los periféricos AXI4-Lite.
+- Dirección AXI4-Lite del TPG: `0x41220000`.
+- Tamaño del segmento AXI del TPG: `0x00010000`.
 
 ## Requisitos
 
 Para reconstruir el hardware se necesita:
 
 - Xilinx Vivado 2019.1.
-- El soporte para dispositivos Zynq-7000 instalado en Vivado.
-- Una copia completa de este repositorio.
+- Soporte para dispositivos Zynq-7000.
+- Una copia completa del repositorio.
+- Espacio disponible para generar el proyecto dentro de `work/`.
 
-El núcleo HDMI de Digilent utilizado por el diseño ya está incluido en:
+El núcleo HDMI utilizado por el diseño está incluido en:
 
 ```text
 vivado/ip/hdmi_tx_1.0/
 ```
 
-Por tanto, no es necesario añadir manualmente el antiguo repositorio de IP.
+Por tanto, no es necesario añadir manualmente otro repositorio de IP para ese
+bloque.
 
-Para ejecutar posteriormente el software en la placa también se necesita:
+Para ejecutar posteriormente el software también se necesita:
 
 - Xilinx SDK 2019.1.
-- Los controladores JTAG de Xilinx/Digilent.
+- Controladores JTAG de Xilinx/Digilent.
 - Una Zybo Z7-10.
-- Un cable USB para programación y comunicación serie.
+- Un cable USB.
 - Un monitor conectado a la salida HDMI.
+- Una terminal serie.
 
-## Archivos utilizados
+## Fuentes versionadas utilizadas
 
-El script reconstruye el proyecto utilizando únicamente archivos
-versionados en el repositorio:
+El script utiliza los siguientes elementos del repositorio:
 
 ```text
 vivado/scripts/create_project.tcl
@@ -48,85 +85,146 @@ rtl/tpg/src/tpg_core.v
 rtl/tpg/src/tpg_axis_wrapper.v
 ```
 
-No utiliza archivos del proyecto Vivado original almacenado en `work/`.
+No utiliza los archivos del proyecto original almacenados en `work/`.
 
-## Reconstrucción desde la línea de comandos
+## Reconstrucción desde PowerShell
 
-Abrir una consola configurada para Vivado 2019.1 y situarse en la raíz
-del repositorio:
+Abrir PowerShell, situarse en la raíz del repositorio y ejecutar:
 
 ```powershell
 cd C:\ruta\al\repositorio\tfm-video-zynq
-```
-
-Para crear el proyecto con su nombre predeterminado:
-
-```powershell
 vivado -mode batch -source vivado/scripts/create_project.tcl
 ```
 
-El proyecto se generará en:
-
-```text
-work/proyecto_base/
-```
-
-También se puede indicar otro nombre para realizar una reconstrucción de
-prueba sin interferir con un proyecto existente:
+Si Vivado no se encuentra en `PATH`, puede utilizarse su ruta completa:
 
 ```powershell
-vivado -mode batch -source vivado/scripts/create_project.tcl `
-    -tclargs --project_name proyecto_base_rebuild
+& "C:\Xilinx\Vivado\2019.1\bin\vivado.bat" -mode batch -source vivado/scripts/create_project.tcl
 ```
 
-En ese caso se generará:
+El proyecto se genera en:
+
+```text
+work/proyecto_base/proyecto_base.xpr
+```
+
+Para crear una reconstrucción de prueba con otro nombre:
+
+```powershell
+vivado -mode batch -source vivado/scripts/create_project.tcl -tclargs --project_name proyecto_base_rebuild
+```
+
+El resultado se genera en:
 
 ```text
 work/proyecto_base_rebuild/proyecto_base_rebuild.xpr
 ```
 
-El script no debe ejecutarse usando el nombre de un proyecto que ya exista.
-Si `work/proyecto_base/` ya contiene el proyecto de trabajo, se recomienda
-utilizar otro nombre, como `proyecto_base_rebuild`.
+El nombre indicado no debe coincidir con un proyecto que ya exista.
 
-## Reconstrucción desde la interfaz de Vivado
+## Reconstrucción desde CMD
 
-También se puede abrir Vivado 2019.1 y ejecutar desde la consola Tcl:
+En el símbolo del sistema no debe utilizarse el operador `&` de PowerShell:
+
+```bat
+cd C:\ruta\al\repositorio\tfm-video-zynq
+"C:\Xilinx\Vivado\2019.1\bin\vivado.bat" -mode batch -source vivado/scripts/create_project.tcl -tclargs --project_name proyecto_base_rebuild
+```
+
+## Reconstrucción desde la consola Tcl de Vivado
+
+Si Vivado ya está abierto, debe ejecutarse únicamente el comando Tcl:
 
 ```tcl
 source {C:/ruta/al/repositorio/tfm-video-zynq/vivado/scripts/create_project.tcl}
 ```
 
-Al terminar, se puede abrir el archivo `.xpr` generado dentro de `work/`.
+No debe pegarse `vivado -mode batch ...` dentro de la consola Tcl, ya que ese
+es un comando del sistema operativo y no un comando Tcl.
+
+## Comprobaciones después de reconstruir
+
+Una vez generado el proyecto:
+
+1. Abrir el archivo `.xpr`.
+2. Comprobar que aparece el Block Design `design_1`.
+3. Ejecutar `Validate Design`.
+4. Comprobar que el TPG está conectado a `S_AXIS_S2MM`.
+5. Comprobar que `M03_AXI` del interconnect llega al puerto AXI4-Lite del TPG.
+6. Comprobar que `fsync_out` del VTC llega a `frame_sync_async`.
+7. Abrir el Address Editor.
+8. Verificar que el TPG está situado en `0x41220000`.
+9. Comprobar que no existen IP bloqueadas ni referencias a módulos ausentes.
+
+## Simulación del TPG
+
+Los testbenches se encuentran en:
+
+```text
+rtl/tpg/tb/tb_tpg_core.v
+rtl/tpg/tb/tb_tpg_axis_wrapper.v
+```
+
+Desde una consola configurada para Vivado pueden ejecutarse de forma
+independiente.
+
+### Core
+
+```powershell
+xvlog rtl/tpg/src/tpg_core.v rtl/tpg/tb/tb_tpg_core.v
+xelab tb_tpg_core -s tb_tpg_core_sim
+xsim tb_tpg_core_sim -runall
+```
+
+El resultado correcto termina con:
+
+```text
+TB PASSED: tpg_core patterns, pacing, backpressure and enable checks passed
+```
+
+### Wrapper AXI4-Stream y AXI4-Lite
+
+```powershell
+xvlog rtl/tpg/src/tpg_core.v rtl/tpg/src/tpg_axis_wrapper.v rtl/tpg/tb/tb_tpg_axis_wrapper.v
+xelab tb_tpg_axis_wrapper -s tb_tpg_axis_wrapper_sim
+xsim tb_tpg_axis_wrapper_sim -runall
+```
+
+El resultado correcto termina con:
+
+```text
+TB PASSED: AXI-Lite control, frame-safe updates and video checks passed
+```
 
 ## Generación del bitstream
 
-Una vez abierto el proyecto reconstruido:
+Una vez abierto y comprobado el proyecto:
 
-1. Comprobar que el Block Design `design_1` aparece correctamente.
-2. Comprobar que no existen IP bloqueadas ni referencias ausentes.
-3. Seleccionar `Generate Bitstream` en Vivado.
-4. Esperar a que terminen la síntesis y la implementación.
+1. Seleccionar `Generate Bitstream`.
+2. Esperar a que terminen síntesis e implementación.
+3. Revisar el timing.
+4. Revisar los DRC y sus advertencias.
+5. Confirmar que el bitstream se genera correctamente.
 
-El bitstream se generará dentro del directorio de ejecución de implementación
-del proyecto, bajo `work/`.
+Los resultados se almacenan dentro del directorio del proyecto bajo `work/`.
 
 ## Exportación del hardware
 
-Después de generar correctamente el bitstream:
+Después de generar el bitstream:
 
 1. Seleccionar `File -> Export -> Export Hardware`.
 2. Activar `Include bitstream`.
-3. Exportar el hardware.
-4. Abrir Xilinx SDK 2019.1.
-5. Crear o actualizar la plataforma hardware y su BSP.
-6. Crear la aplicación utilizando el código disponible en:
+3. Exportar el hardware al workspace de SDK.
+4. Abrir o actualizar la plataforma hardware en Xilinx SDK.
+5. Aceptar la sincronización de la nueva especificación.
+6. Regenerar el BSP cuando sea necesario.
+7. Compilar la aplicación disponible en:
 
 ```text
 sw/vitis/src/main.c
 ```
 
-La creación y ejecución del proyecto software se explica con más detalle en:
+La creación y ejecución de la aplicación se explica en:
 
 ```text
 sw/vitis/README.md
@@ -134,23 +232,23 @@ sw/vitis/README.md
 
 ## Resultado esperado
 
-Al programar la FPGA y ejecutar la aplicación software, la VDMA utiliza la
-DDR del Zynq como memoria de vídeo.
+Después de programar la FPGA y ejecutar la aplicación:
 
-El monitor HDMI debe mostrar cuatro barras verticales:
+- La VDMA debe escribir los frames del TPG en la DDR.
+- La VDMA debe leerlos y enviarlos hacia la salida HDMI.
+- El monitor debe mostrar inicialmente las barras de color.
+- La terminal UART debe mostrar el prompt `tpg>`.
+- Los patrones deben poder cambiarse mediante comandos.
+- Los cambios deben aplicarse sin dividir el frame visible.
+- El comando `status` debe mostrar los registros del TPG.
 
-```text
-rojo | verde | azul | blanco
-```
-
-Este resultado confirma el funcionamiento conjunto del TPG, la interfaz
-AXI4-Stream, la VDMA, la DDR, el subsistema de salida de vídeo y el
-transmisor HDMI.
+Este comportamiento confirma el funcionamiento conjunto del TPG, AXI4-Stream,
+AXI4-Lite, AXI VDMA, DDR, PS, software, Video Timing Controller y salida HDMI.
 
 ## Archivos generados
 
-Los proyectos, bitstreams, exportaciones de hardware, logs y demás resultados
-generados por Vivado o SDK deben permanecer en `work/`.
+Los proyectos, bitstreams, exportaciones hardware, logs, journals, resultados
+de simulación y demás artefactos generados por Vivado o SDK permanecen en
+`work/` o en directorios ignorados.
 
-El directorio `work/` está ignorado por Git. Solo deben versionarse las
-fuentes necesarias para reconstruir el diseño.
+Solo se versionan las fuentes necesarias para reconstruir el diseño.
