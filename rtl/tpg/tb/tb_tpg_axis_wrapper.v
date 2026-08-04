@@ -7,6 +7,12 @@ module tb_tpg_axis_wrapper;
     localparam integer TB_WIDTH  = 4;
     localparam integer TB_HEIGHT = 3;
     localparam integer TB_PIXELS = TB_WIDTH * TB_HEIGHT;
+    localparam integer TB_NEW_WIDTH  = 8;
+    localparam integer TB_NEW_HEIGHT = 2;
+    localparam integer TB_NEW_PIXELS = TB_NEW_WIDTH * TB_NEW_HEIGHT;
+    localparam [31:0] TB_FRAME_SIZE = (TB_HEIGHT << 16) | TB_WIDTH;
+    localparam [31:0] TB_NEW_FRAME_SIZE =
+        (TB_NEW_HEIGHT << 16) | TB_NEW_WIDTH;
 
     // AXI-Lite register offsets.
     localparam [4:0] ADDR_ENABLE        = 5'h00;
@@ -15,6 +21,7 @@ module tb_tpg_axis_wrapper;
     localparam [4:0] ADDR_TEMPORAL_STEP = 5'h0C;
     localparam [4:0] ADDR_STATUS        = 5'h10;
     localparam [4:0] ADDR_FRAME_PHASE   = 5'h14;
+    localparam [4:0] ADDR_FRAME_SIZE    = 5'h18;
 
     reg clk;
     reg rst;
@@ -411,6 +418,7 @@ module tb_tpg_axis_wrapper;
         axi_read(ADDR_TEMPORAL_STEP, 32'd1,       0);
         axi_read(ADDR_STATUS,        32'd0,       0);
         axi_read(ADDR_FRAME_PHASE,   32'd0,       0);
+        axi_read(ADDR_FRAME_SIZE,    TB_FRAME_SIZE, 0);
 
         // Exercise all AW/W arrival orders while the core is idle.
         axi_write(ADDR_PATTERN, 32'd1, 4'b0001, 0, 0, 0);
@@ -456,6 +464,12 @@ module tb_tpg_axis_wrapper;
         // reads back the requested value, but the active frame stays solid.
         axi_write(ADDR_PATTERN, 32'd0, 4'b0001, 0, 0, 1);
         axi_read(ADDR_PATTERN, 32'd0, 0);
+
+        // Request a new frame size while the current frame is active. The
+        // register reads back the requested size, but the current frame must
+        // retain its original dimensions until its final pixel is accepted.
+        axi_write(ADDR_FRAME_SIZE, TB_NEW_FRAME_SIZE, 4'b1111, 0, 0, 0);
+        axi_read(ADDR_FRAME_SIZE, TB_NEW_FRAME_SIZE, 0);
         axi_read(ADDR_STATUS, 32'd3, 0);
 
         check_position(16'd0, 16'd0);
@@ -493,11 +507,11 @@ module tb_tpg_axis_wrapper;
 
         m_axis_video_tready = 1'b1;
 
-        for (i = 0; i < TB_PIXELS; i = i + 1) begin
-            check_position(i % TB_WIDTH, i / TB_WIDTH);
+        for (i = 0; i < TB_NEW_PIXELS; i = i + 1) begin
+            check_position(i % TB_NEW_WIDTH, i / TB_NEW_WIDTH);
             check_axis_flags(
                 (i == 0),
-                ((i % TB_WIDTH) == (TB_WIDTH - 1))
+                ((i % TB_NEW_WIDTH) == (TB_NEW_WIDTH - 1))
             );
             check_pixel(24'h000000);
             tick;
@@ -505,6 +519,16 @@ module tb_tpg_axis_wrapper;
 
         check_idle;
         axi_read(ADDR_FRAME_PHASE, 32'd6, 0);
+
+        // Restore the original size while idle; it must apply immediately.
+        axi_write(ADDR_FRAME_SIZE, TB_FRAME_SIZE, 4'b1111, 0, 0, 0);
+        axi_read(ADDR_FRAME_SIZE, TB_FRAME_SIZE, 0);
+
+        // Partial writes and zero dimensions are invalid and must be ignored.
+        axi_write(ADDR_FRAME_SIZE, 32'h0009_0006, 4'b0011, 0, 0, 0);
+        axi_read(ADDR_FRAME_SIZE, TB_FRAME_SIZE, 0);
+        axi_write(ADDR_FRAME_SIZE, 32'h0000_0008, 4'b1111, 0, 0, 0);
+        axi_read(ADDR_FRAME_SIZE, TB_FRAME_SIZE, 0);
 
         // Restore the solid pattern while idle; it must apply immediately.
         axi_write(ADDR_PATTERN, 32'd1, 4'b0001, 0, 0, 0);
