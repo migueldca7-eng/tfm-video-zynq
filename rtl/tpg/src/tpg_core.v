@@ -54,6 +54,44 @@ module tpg_core (
     wire       start_request;
     wire       last_pixel;
 
+    // Registered boundaries for the eight vertical color bars. They are
+    // calculated while the generator is idle, keeping multipliers and
+    // dividers out of the combinational pixel-generation path.
+    reg  [15:0] color_bar_limit_1;
+    reg  [15:0] color_bar_limit_2;
+    reg  [15:0] color_bar_limit_3;
+    reg  [15:0] color_bar_limit_4;
+    reg  [15:0] color_bar_limit_5;
+    reg  [15:0] color_bar_limit_6;
+    reg  [15:0] color_bar_limit_7;
+    wire [18:0] active_width_extended;
+
+    // Three leading zeros prevent overflow when the 16-bit width is
+    // multiplied by a bar index from one to seven.
+    assign active_width_extended = {3'b000, active_width};
+
+    // Division by eight is implemented as a three-position right shift.
+    // The boundaries remain stable throughout an active frame.
+    always @(posedge clk) begin
+        if (rst) begin
+            color_bar_limit_1 <= 16'd0;
+            color_bar_limit_2 <= 16'd0;
+            color_bar_limit_3 <= 16'd0;
+            color_bar_limit_4 <= 16'd0;
+            color_bar_limit_5 <= 16'd0;
+            color_bar_limit_6 <= 16'd0;
+            color_bar_limit_7 <= 16'd0;
+        end else if (!busy) begin
+            color_bar_limit_1 <= (active_width_extended * 4'd1) >> 3;
+            color_bar_limit_2 <= (active_width_extended * 4'd2) >> 3;
+            color_bar_limit_3 <= (active_width_extended * 4'd3) >> 3;
+            color_bar_limit_4 <= (active_width_extended * 4'd4) >> 3;
+            color_bar_limit_5 <= (active_width_extended * 4'd5) >> 3;
+            color_bar_limit_6 <= (active_width_extended * 4'd6) >> 3;
+            color_bar_limit_7 <= (active_width_extended * 4'd7) >> 3;
+        end
+    end
+
     // Selects the RGB value associated with the current pixel coordinates.
     always @(*) begin
         case (pattern_select)
@@ -67,19 +105,19 @@ module tpg_core (
 
             // Eight equal-width vertical color bars.
             PATTERN_COLOR_BARS: begin
-                if (x_pos < ((active_width * 1) / 8))
+                if (x_pos < color_bar_limit_1)
                     next_pixel_rgb = 24'hFFFFFF;
-                else if (x_pos < ((active_width * 2) / 8))
+                else if (x_pos < color_bar_limit_2)
                     next_pixel_rgb = 24'hFFFF00;
-                else if (x_pos < ((active_width * 3) / 8))
+                else if (x_pos < color_bar_limit_3)
                     next_pixel_rgb = 24'h00FFFF;
-                else if (x_pos < ((active_width * 4) / 8))
+                else if (x_pos < color_bar_limit_4)
                     next_pixel_rgb = 24'h00FF00;
-                else if (x_pos < ((active_width * 5) / 8))
+                else if (x_pos < color_bar_limit_5)
                     next_pixel_rgb = 24'hFF00FF;
-                else if (x_pos < ((active_width * 6) / 8))
+                else if (x_pos < color_bar_limit_6)
                     next_pixel_rgb = 24'hFF0000;
-                else if (x_pos < ((active_width * 7) / 8))
+                else if (x_pos < color_bar_limit_7)
                     next_pixel_rgb = 24'h0000FF;
                 else
                     next_pixel_rgb = 24'h000000;
