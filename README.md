@@ -9,10 +9,12 @@ configurable con salida HDMI.
 
 ## Estado actual
 
-Actualmente está implementada y validada físicamente una primera versión
-estable de la plataforma con:
+La plataforma base está validada físicamente a 640 × 480. En la rama
+`feature/tpg-resolution` también está implementado el cambio coordinado de
+resolución, pendiente todavía de validación física mediante HDMI. El estado
+actual incluye:
 
-- Resolución fija de 640 × 480 píxeles.
+- Perfiles de 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
 - Formato RGB888 de 24 bits por píxel.
 - Test Pattern Generator propio escrito en Verilog.
 - Ocho patrones de vídeo seleccionables.
@@ -22,9 +24,12 @@ estable de la plataforma con:
 - Interfaz AXI4-Lite para configurar el TPG desde el procesador.
 - Aplicación bare-metal con consola de comandos por UART.
 - Actualización de la configuración entre frames completos.
+- Reconfiguración coordinada del TPG, la VDMA, el VTC y el Clock Wizard.
+- Tres espacios de 6 MiB reservados en DDR para los framebuffers.
 
-La implementación ha sido comprobada mediante testbenches y mediante pruebas
-sobre la Zybo Z7-10.
+El TPG, el control AXI4-Lite/UART y la cadena fija se han comprobado mediante
+testbenches y pruebas sobre la Zybo Z7-10. El cambio de resolución compila, el
+bitstream cumple timing y queda pendiente de prueba física.
 
 ## Plataforma utilizada
 
@@ -94,6 +99,7 @@ Los siguientes parámetros pueden modificarse desde software:
 - Patrón seleccionado.
 - Color sólido.
 - Paso de la rampa temporal.
+- Perfil de resolución.
 
 El patrón, el color y el paso temporal se guardan primero como configuración
 solicitada. Si hay un frame en curso, el wrapper espera a que termine antes de
@@ -111,6 +117,26 @@ La dirección base AXI4-Lite asignada actualmente al TPG es:
 
 La aplicación y el mapa de registros se documentan en
 [`sw/vitis/README.md`](sw/vitis/README.md).
+
+## Cambio coordinado de resolución
+
+La aplicación ofrece tres perfiles cerrados:
+
+| Identificador | Modo | Reloj de píxel nominal |
+|---:|---|---:|
+| 0 | 640 × 480p60 | 25 MHz |
+| 1 | 1280 × 720p60 | 74,25 MHz |
+| 2 | 1920 × 1080p30 | 74,25 MHz |
+
+El comando `resolution <0..2>` detiene la cadena de forma ordenada y aplica el
+nuevo perfil. El TPG termina el frame activo, se paran ambos canales de la
+VDMA, se deshabilita el VTC, se reconfigura el Clock Wizard y se cargan las
+nuevas dimensiones y temporizaciones. La VDMA y el VTC se arrancan antes de
+restaurar el estado anterior de `enable`.
+
+Los valores del Clock Wizard están precalculados. El bitstream se implementa
+para el perfil de mayor frecuencia y el software selecciona el perfil necesario
+en tiempo de ejecución, sin regenerar el bitstream.
 
 ## Verificación
 
@@ -143,6 +169,15 @@ También se han realizado pruebas físicas sobre la placa para verificar:
 - Rechazo de comandos UART incorrectos.
 
 Todas estas pruebas se han superado correctamente.
+
+La reconfiguración de resolución está implementada y compila sin avisos, pero
+su validación física queda pendiente. Antes de integrar la rama deben probarse:
+
+- Las transiciones `0 → 1 → 2 → 0`.
+- Los cambios con `enable=1` y con `enable=0`.
+- La lectura del modo activo mediante `status`.
+- Los ocho patrones en cada resolución.
+- El rechazo de índices y argumentos incorrectos.
 
 ## Estructura del repositorio
 
@@ -223,7 +258,7 @@ feature/*  desarrollo aislado de cada funcionalidad
 
 El desarrollo previsto continúa con:
 
-1. Cambio coordinado de resolución de la cadena de vídeo.
+1. Validación física y cierre del cambio coordinado de resolución.
 2. Selector de fuente entre el TPG y la entrada de cámara.
 3. Bloque de procesado HLS con selección de bypass.
 4. Pruebas integrales y documentación final.
