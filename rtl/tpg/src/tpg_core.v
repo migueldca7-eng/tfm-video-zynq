@@ -1,10 +1,7 @@
 `timescale 1ns / 1ps
 
 // Generates an RGB888 test-pattern stream and its video timing markers.
-module tpg_core #(
-    parameter integer G_WIDTH  = 640,
-    parameter integer G_HEIGHT = 480
-)(
+module tpg_core (
     input  wire        clk,
     input  wire        rst,
 
@@ -17,6 +14,10 @@ module tpg_core #(
     input  wire [2:0]  pattern_select,
     input  wire [23:0] solid_color,
     input  wire [7:0]  temporal_step,
+
+    // Active frame dimensions. The wrapper keeps them stable while busy.
+    input  wire [15:0] active_width,
+    input  wire [15:0] active_height,
 
     // Generated pixel stream and timing markers.
     output wire [23:0] pixel_rgb,
@@ -53,6 +54,44 @@ module tpg_core #(
     wire       start_request;
     wire       last_pixel;
 
+    // Registered boundaries for the eight vertical color bars. They are
+    // calculated while the generator is idle, keeping multipliers and
+    // dividers out of the combinational pixel-generation path.
+    reg  [15:0] color_bar_limit_1;
+    reg  [15:0] color_bar_limit_2;
+    reg  [15:0] color_bar_limit_3;
+    reg  [15:0] color_bar_limit_4;
+    reg  [15:0] color_bar_limit_5;
+    reg  [15:0] color_bar_limit_6;
+    reg  [15:0] color_bar_limit_7;
+    wire [18:0] active_width_extended;
+
+    // Three leading zeros prevent overflow when the 16-bit width is
+    // multiplied by a bar index from one to seven.
+    assign active_width_extended = {3'b000, active_width};
+
+    // Division by eight is implemented as a three-position right shift.
+    // The boundaries remain stable throughout an active frame.
+    always @(posedge clk) begin
+        if (rst) begin
+            color_bar_limit_1 <= 16'd0;
+            color_bar_limit_2 <= 16'd0;
+            color_bar_limit_3 <= 16'd0;
+            color_bar_limit_4 <= 16'd0;
+            color_bar_limit_5 <= 16'd0;
+            color_bar_limit_6 <= 16'd0;
+            color_bar_limit_7 <= 16'd0;
+        end else if (!busy) begin
+            color_bar_limit_1 <= (active_width_extended * 4'd1) >> 3;
+            color_bar_limit_2 <= (active_width_extended * 4'd2) >> 3;
+            color_bar_limit_3 <= (active_width_extended * 4'd3) >> 3;
+            color_bar_limit_4 <= (active_width_extended * 4'd4) >> 3;
+            color_bar_limit_5 <= (active_width_extended * 4'd5) >> 3;
+            color_bar_limit_6 <= (active_width_extended * 4'd6) >> 3;
+            color_bar_limit_7 <= (active_width_extended * 4'd7) >> 3;
+        end
+    end
+
     // Selects the RGB value associated with the current pixel coordinates.
     always @(*) begin
         case (pattern_select)
@@ -66,19 +105,19 @@ module tpg_core #(
 
             // Eight equal-width vertical color bars.
             PATTERN_COLOR_BARS: begin
-                if (x_pos < ((G_WIDTH * 1) / 8))
+                if (x_pos < color_bar_limit_1)
                     next_pixel_rgb = 24'hFFFFFF;
-                else if (x_pos < ((G_WIDTH * 2) / 8))
+                else if (x_pos < color_bar_limit_2)
                     next_pixel_rgb = 24'hFFFF00;
-                else if (x_pos < ((G_WIDTH * 3) / 8))
+                else if (x_pos < color_bar_limit_3)
                     next_pixel_rgb = 24'h00FFFF;
-                else if (x_pos < ((G_WIDTH * 4) / 8))
+                else if (x_pos < color_bar_limit_4)
                     next_pixel_rgb = 24'h00FF00;
-                else if (x_pos < ((G_WIDTH * 5) / 8))
+                else if (x_pos < color_bar_limit_5)
                     next_pixel_rgb = 24'hFF00FF;
-                else if (x_pos < ((G_WIDTH * 6) / 8))
+                else if (x_pos < color_bar_limit_6)
                     next_pixel_rgb = 24'hFF0000;
-                else if (x_pos < ((G_WIDTH * 7) / 8))
+                else if (x_pos < color_bar_limit_7)
                     next_pixel_rgb = 24'h0000FF;
                 else
                     next_pixel_rgb = 24'h000000;
@@ -147,8 +186,8 @@ module tpg_core #(
     assign start_request = enable_rise || (enable && start_frame);
 
     // Identifies the final pixel coordinates of the current frame.
-    assign last_pixel = (x_pos == G_WIDTH - 1) &&
-                        (y_pos == G_HEIGHT - 1);
+    assign last_pixel = (x_pos == active_width  - 16'd1) &&
+                        (y_pos == active_height - 16'd1);
 
     // Exposes the internal generator state to the wrapper.
     assign busy_out        = busy;
@@ -166,7 +205,7 @@ module tpg_core #(
     assign frame_start = busy &&
                          (x_pos == 16'd0) &&
                          (y_pos == 16'd0);
-    assign line_end = busy && (x_pos == G_WIDTH - 1);
+    assign line_end = busy && (x_pos == active_width - 16'd1);
 
     // Controls frame generation and advances the pixel coordinates.
     always @(posedge clk) begin
@@ -194,7 +233,7 @@ module tpg_core #(
                 y_pos       <= 16'd0;
                 frame_phase <= frame_phase + temporal_step;
                 busy        <= 1'b0;
-            end else if (x_pos == G_WIDTH - 1) begin
+            end else if (x_pos == active_width - 16'd1) begin
                 // End of the current line: return to its first column.
                 x_pos <= 16'd0;
                 y_pos <= y_pos + 16'd1;

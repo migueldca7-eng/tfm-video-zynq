@@ -30,12 +30,15 @@ TPG RTL
   -> HDMI
 ```
 
-La versión validada utiliza:
+La cadena fija está validada físicamente a 640 × 480. El software también
+incluye tres perfiles de resolución seleccionables, cuya conmutación física
+queda pendiente de validación:
 
-- Resolución: 640 × 480.
+- Modo 0: 640 × 480p60, reloj de píxel nominal de 25 MHz.
+- Modo 1: 1280 × 720p60, reloj de píxel nominal de 74,25 MHz.
+- Modo 2: 1920 × 1080p30, reloj de píxel nominal de 74,25 MHz.
 - Formato de píxel: RGB888 de 24 bits.
 - Tamaño de píxel: 3 bytes.
-- Stride: 1920 bytes.
 - Tres framebuffers en DDR.
 - Funcionamiento circular del VDMA.
 - Sincronización interna entre los canales S2MM y MM2S.
@@ -46,15 +49,16 @@ Durante el arranque, el programa:
 
 1. Deshabilita temporalmente el inicio de nuevos frames del TPG.
 2. Localiza el AXI VDMA mediante los parámetros generados por el BSP.
-3. Inicializa el driver `XAxiVdma`.
+3. Inicializa los drivers `XAxiVdma` y `XVtc`.
 4. Comprueba que existen los canales S2MM y MM2S.
-5. Reinicia ambos canales con timeout.
-6. Configura la resolución, el stride y los tres framebuffers.
-7. Arranca el canal S2MM para escribir vídeo en DDR.
-8. Arranca el canal MM2S para leer los frames y enviarlos a HDMI.
-9. Configura los valores iniciales del TPG.
-10. Habilita el generador.
-11. Entra en un bucle de recepción de comandos por UART.
+5. Selecciona el perfil inicial de 25 MHz en el Clock Wizard.
+6. Reinicia ambos canales de la VDMA con timeout.
+7. Configura resolución, stride y direcciones de los framebuffers.
+8. Arranca S2MM y MM2S.
+9. Configura y habilita el VTC para el modo inicial.
+10. Configura el TPG para 640 × 480 y carga sus parámetros iniciales.
+11. Habilita el generador.
+12. Entra en un bucle de recepción de comandos por UART.
 
 Los valores iniciales configurados por la aplicación son:
 
@@ -67,21 +71,25 @@ temporal step = 1
 
 ## Distribución de los framebuffers
 
-Los framebuffers comienzan en la dirección física `0x02000000`.
+Los framebuffers comienzan en la dirección física `0x02000000`. Cada uno
+dispone de un espacio fijo de 6 MiB para que sus direcciones no cambien entre
+modos y pueda alojar un frame RGB888 de 1920 × 1080.
 
 | Buffer | Dirección |
 |---|---:|
 | 0 | `0x02000000` |
-| 1 | `0x020E1000` |
-| 2 | `0x021C2000` |
+| 1 | `0x02600000` |
+| 2 | `0x02C00000` |
 
-Cada frame ocupa:
+El stride y el tamaño útil se calculan para el perfil seleccionado:
 
-```text
-640 × 480 × 3 = 921600 bytes = 0x000E1000 bytes
-```
+| Modo | Stride | Tamaño útil del frame |
+|---|---:|---:|
+| 640 × 480 | 1 920 bytes | 921 600 bytes |
+| 1280 × 720 | 3 840 bytes | 2 764 800 bytes |
+| 1920 × 1080 | 5 760 bytes | 6 220 800 bytes |
 
-Los tres buffers terminan antes de `0x022A3000`.
+El mayor frame cabe en los 6 291 456 bytes reservados para cada buffer.
 
 ## Interfaz AXI4-Lite del TPG
 
@@ -104,6 +112,7 @@ TPG_BASEADDR = 0x41220000
 | `0x0C` | `TEMPORAL_STEP` | R/W | Bits 7:0: paso temporal |
 | `0x10` | `STATUS` | R | Bit 0: `busy`; bit 1: `pending` |
 | `0x14` | `FRAME_PHASE` | R | Bits 7:0: fase temporal actual |
+| `0x18` | `FRAME_SIZE` | R/W | Alto en bits 31:16; ancho en bits 15:0 |
 
 Los registros `PATTERN`, `SOLID_COLOR` y `TEMPORAL_STEP` devuelven los valores
 solicitados por software.
@@ -169,6 +178,9 @@ Muestra:
 - Estado `busy`.
 - Estado `pending`.
 - Fase temporal.
+- Nombre del modo activo.
+- Resolución activa.
+- Reloj de píxel nominal.
 
 ### Habilitar o deshabilitar el TPG
 
@@ -243,6 +255,28 @@ La aritmética es de 8 bits, por lo que la fase vuelve a cero al superar 255.
 Con `step 1` se recorren los 256 niveles, mientras que con pasos mayores la
 rampa evoluciona más rápidamente.
 
+### Cambiar la resolución
+
+```text
+resolution <0..2>
+```
+
+| Valor | Modo |
+|---:|---|
+| 0 | 640 × 480p60 |
+| 1 | 1280 × 720p60 |
+| 2 | 1920 × 1080p30 |
+
+El software conserva el estado anterior de `enable`. Primero impide que el TPG
+comience otro frame y espera a que termine el actual. Después detiene ambos
+canales de la VDMA, deshabilita el VTC, reconfigura el Clock Wizard y carga las
+nuevas temporizaciones y dimensiones. Finalmente arranca la cadena y restaura
+el valor anterior de `enable`.
+
+Todas las esperas por polling tienen timeout. Si falla una operación, el modo
+activo no se actualiza y el TPG permanece deshabilitado para evitar una cadena
+parcialmente configurada.
+
 ## Validación de comandos
 
 Antes de escribir cualquier registro, la aplicación comprueba:
@@ -262,6 +296,7 @@ pattern 8
 enable 2
 color 0x1000000
 step 256
+resolution 3
 pattern hola
 status extra
 ```
@@ -303,7 +338,8 @@ VDMA MM2S/read running
 Video pipeline running
 ```
 
-Después puede utilizarse `status` y cambiar el patrón en tiempo real.
+Después puede utilizarse `status`, cambiar el patrón y solicitar otro perfil
+mediante `resolution`.
 
 ## Pruebas realizadas
 
@@ -321,11 +357,21 @@ La aplicación y la interfaz AXI4-Lite se han validado físicamente comprobando:
 
 Todas las pruebas se han superado correctamente.
 
+El cambio coordinado de resolución está implementado, el software compila sin
+avisos y el bitstream cumple timing. Falta realizar la validación física con un
+monitor HDMI mediante esta secuencia mínima:
+
+1. Comprobar el arranque en el modo 0 y ejecutar `status`.
+2. Probar las transiciones `0 → 1 → 2 → 0` con `enable 1`.
+3. Repetir los cambios con `enable 0` y comprobar que el TPG permanece parado.
+4. Mostrar los ocho patrones en cada modo.
+5. Probar `resolution 3`, argumentos no numéricos y argumentos adicionales.
+
 ## Funcionalidades pendientes
 
 Esta versión todavía no incluye:
 
-- Cambio dinámico de resolución.
+- Validación física del cambio dinámico de resolución.
 - Selector de fuente de vídeo.
 - Entrada de cámara integrada en la cadena final.
 - Procesado HLS.

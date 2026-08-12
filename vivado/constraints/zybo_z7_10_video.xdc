@@ -68,3 +68,12 @@ set_property PULLUP true [get_ports {iic_0_sda_io}]
 
 set_property SLEW SLOW [get_ports {iic_0_scl_io}]
 set_property SLEW SLOW [get_ports {iic_0_sda_io}]
+
+# -----------------------------------------------------------------------------
+# Asynchronous VTC-to-TPG frame synchronization
+# -----------------------------------------------------------------------------
+
+# frame_sync_async crosses from the pixel-clock domain into the TPG clock
+# domain. Metastability is contained by the two-register synchronizer, so the
+# asynchronous path is excluded only up to the first synchronization register.
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ */frame_sync_ff1_reg/D}]
