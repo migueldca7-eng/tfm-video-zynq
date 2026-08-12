@@ -13,6 +13,7 @@
 #include "xil_printf.h"
 #include "xparameters.h"
 #include "xstatus.h"
+#include "xtime_l.h"
 #include "xvtc.h"
 
 #define VDMA_DEVICE_ID       XPAR_AXIVDMA_0_DEVICE_ID
@@ -21,6 +22,7 @@
 #define VTC_DEVICE_ID        XPAR_VTC_0_DEVICE_ID
 
 #define CLK_WIZ_BASEADDR           XPAR_CLK_WIZ_0_BASEADDR
+#define CLK_WIZ_CONTROL_OFFSET     0x000U
 #define CLK_WIZ_STATUS_OFFSET      0x004U
 #define CLK_WIZ_FEEDBACK_OFFSET    0x200U
 #define CLK_WIZ_HDMI5X_OFFSET      0x208U
@@ -28,9 +30,10 @@
 #define CLK_WIZ_CAMERA_OFFSET      0x220U
 #define CLK_WIZ_LOAD_OFFSET        0x25CU
 #define CLK_WIZ_LOCKED_MASK        0x00000001U
-#define CLK_WIZ_LOAD_REQUEST       0x00000007U
-#define CLK_WIZ_LOAD_CLEAR         0x00000002U
-#define CLK_WIZ_LOCK_TIMEOUT       1000000U
+#define CLK_WIZ_LOAD_MASK          0x00000001U
+#define CLK_WIZ_LOAD_AXI           0x00000003U
+#define CLK_WIZ_SW_RESET           0x0000000AU
+#define CLK_WIZ_READY_TIMEOUT_MS   10U
 
 #define BYTES_PER_PIXEL      3U
 #define FRAME_BUFFER_COUNT   3U
@@ -468,35 +471,53 @@ static void vtc_configure(XVtc *InstancePtr, const VideoMode *Mode)
 }
 
 /*
- * Espera a que el bit locked del Clock Wizard tome el valor solicitado. El
- * timeout evita que un fallo del MMCM deje bloqueada indefinidamente la CPU.
+ * Espera hasta que el Clock Wizard haya terminado cualquier reconfiguracion:
+ * LOAD debe haberse limpiado automaticamente y el MMCM debe recuperar LOCKED.
+ * El temporizador global del PS no depende de los relojes que modificamos.
  */
-static int clock_wait_for_lock(u32 ExpectedLocked)
+static int clock_wait_until_ready(void)
 {
-    u32 Timeout;
-    u32 Locked;
+    XTime StartTime;
+    XTime CurrentTime;
+    XTime TimeoutCounts;
+    u32 StatusRegister;
+    u32 LoadRegister;
 
-    Timeout = CLK_WIZ_LOCK_TIMEOUT;
+    TimeoutCounts =
+        ((XTime)COUNTS_PER_SECOND * CLK_WIZ_READY_TIMEOUT_MS) / 1000U;
+
+    XTime_GetTime(&StartTime);
 
     do {
-        Locked = Xil_In32(
+        StatusRegister = Xil_In32(
             CLK_WIZ_BASEADDR + CLK_WIZ_STATUS_OFFSET
-        ) & CLK_WIZ_LOCKED_MASK;
+        );
 
-        Timeout--;
-    } while ((Locked != ExpectedLocked) && (Timeout > 0U));
+        LoadRegister = Xil_In32(
+            CLK_WIZ_BASEADDR + CLK_WIZ_LOAD_OFFSET
+        );
 
-    if (Locked != ExpectedLocked) {
-        return XST_FAILURE;
-    }
+        if (((StatusRegister & CLK_WIZ_LOCKED_MASK) != 0U) &&
+            ((LoadRegister & CLK_WIZ_LOAD_MASK) == 0U)) {
+            return XST_SUCCESS;
+        }
 
-    return XST_SUCCESS;
+        XTime_GetTime(&CurrentTime);
+    } while ((CurrentTime - StartTime) < TimeoutCounts);
+
+    xil_printf(
+        "ERROR: Clock Wizard timeout, status=0x%08x load=0x%08x\r\n",
+        StatusRegister,
+        LoadRegister
+    );
+
+    return XST_FAILURE;
 }
 
 /*
- * Reconfigura los tres relojes producidos por el Clock Wizard. Primero se
- * escriben los valores precalculados de M, D y los divisores de salida. La
- * escritura en LOAD inicia despues la reconfiguracion efectiva del MMCM.
+ * Carga en el estado programable AXI los divisores precalculados del perfil
+ * solicitado. Los registros determinan la frecuencia del MMCM y de cada una
+ * de sus salidas.
  */
 static int clock_configure(VideoClockProfile Profile)
 {
@@ -509,6 +530,23 @@ static int clock_configure(VideoClockProfile Profile)
     }
 
     Config = &VideoClockConfigs[(u32)Profile];
+
+    /*
+     * El reset software devuelve la logica de reconfiguracion dinamica a un
+     * estado conocido. Esto permite realizar varios cambios consecutivos sin
+     * tener que reprogramar la FPGA.
+     */
+    Xil_Out32(
+        CLK_WIZ_BASEADDR + CLK_WIZ_CONTROL_OFFSET,
+        CLK_WIZ_SW_RESET
+    );
+
+    /* Espera a que el MMCM recupere LOCKED despues del reset software. */
+    Status = clock_wait_until_ready();
+    if (Status != XST_SUCCESS) {
+        xil_printf("ERROR: Clock Wizard software reset failed\r\n");
+        return XST_FAILURE;
+    }
 
     Xil_Out32(
         CLK_WIZ_BASEADDR + CLK_WIZ_FEEDBACK_OFFSET,
@@ -527,28 +565,18 @@ static int clock_configure(VideoClockProfile Profile)
         Config->CameraConfig
     );
 
-    /* El valor 0x07 carga el segundo banco de configuracion dinamica. */
+    /*
+     * LOAD=1 inicia la operacion y SADDR=1 selecciona los valores escritos
+     * mediante AXI. El propio Clock Wizard limpia LOAD cuando recupera lock.
+     */
     Xil_Out32(
         CLK_WIZ_BASEADDR + CLK_WIZ_LOAD_OFFSET,
-        CLK_WIZ_LOAD_REQUEST
+        CLK_WIZ_LOAD_AXI
     );
 
-    Status = clock_wait_for_lock(0U);
-
-    /* Se libera siempre la solicitud para permitir una carga posterior. */
-    Xil_Out32(
-        CLK_WIZ_BASEADDR + CLK_WIZ_LOAD_OFFSET,
-        CLK_WIZ_LOAD_CLEAR
-    );
-
+    Status = clock_wait_until_ready();
     if (Status != XST_SUCCESS) {
-        xil_printf("ERROR: Clock Wizard did not lose lock\r\n");
-        return XST_FAILURE;
-    }
-
-    Status = clock_wait_for_lock(1U);
-    if (Status != XST_SUCCESS) {
-        xil_printf("ERROR: Clock Wizard did not recover lock\r\n");
+        xil_printf("ERROR: Clock Wizard reconfiguration failed\r\n");
         return XST_FAILURE;
     }
 
