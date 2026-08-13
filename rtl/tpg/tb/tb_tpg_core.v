@@ -27,6 +27,8 @@ module tb_tpg_core;
     reg [2:0] pattern_select;
     reg [23:0] solid_color;
     reg [7:0] temporal_step;
+    reg [15:0] active_width;
+    reg [15:0] active_height;
 
     wire [23:0] pixel_rgb;
     wire        pixel_valid;
@@ -38,10 +40,7 @@ module tb_tpg_core;
     wire [15:0] x_pos;
     wire [15:0] y_pos;
 
-    tpg_core #(
-        .G_WIDTH(TB_WIDTH),
-        .G_HEIGHT(TB_HEIGHT)
-    ) dut (
+    tpg_core dut (
         .clk(clk),
         .rst(rst),
         .enable(enable),
@@ -50,6 +49,8 @@ module tb_tpg_core;
         .pattern_select(pattern_select),
         .solid_color(solid_color),
         .temporal_step(temporal_step),
+        .active_width(active_width),
+        .active_height(active_height),
         .pixel_rgb(pixel_rgb),
         .pixel_valid(pixel_valid),
         .frame_start(frame_start),
@@ -90,19 +91,19 @@ module tb_tpg_core;
                 end
 
                 PATTERN_COLOR_BARS: begin
-                    if (x_value < ((TB_WIDTH * 1) / 8))
+                    if (x_value < ((active_width * 1) / 8))
                         expected_pixel = 24'hFFFFFF;
-                    else if (x_value < ((TB_WIDTH * 2) / 8))
+                    else if (x_value < ((active_width * 2) / 8))
                         expected_pixel = 24'hFFFF00;
-                    else if (x_value < ((TB_WIDTH * 3) / 8))
+                    else if (x_value < ((active_width * 3) / 8))
                         expected_pixel = 24'h00FFFF;
-                    else if (x_value < ((TB_WIDTH * 4) / 8))
+                    else if (x_value < ((active_width * 4) / 8))
                         expected_pixel = 24'h00FF00;
-                    else if (x_value < ((TB_WIDTH * 5) / 8))
+                    else if (x_value < ((active_width * 5) / 8))
                         expected_pixel = 24'hFF00FF;
-                    else if (x_value < ((TB_WIDTH * 6) / 8))
+                    else if (x_value < ((active_width * 6) / 8))
                         expected_pixel = 24'hFF0000;
-                    else if (x_value < ((TB_WIDTH * 7) / 8))
+                    else if (x_value < ((active_width * 7) / 8))
                         expected_pixel = 24'h0000FF;
                     else
                         expected_pixel = 24'h000000;
@@ -171,9 +172,9 @@ module tb_tpg_core;
                 solid_color
             );
             expected_frame_start = (expected_x == 0) && (expected_y == 0);
-            expected_line_end = (expected_x == TB_WIDTH - 1);
+            expected_line_end = (expected_x == active_width - 1);
             expected_frame_done = expected_line_end &&
-                                  (expected_y == TB_HEIGHT - 1) &&
+                                  (expected_y == active_height - 1) &&
                                   advance;
 
             if ((x_pos !== expected_x) || (y_pos !== expected_y)) begin
@@ -342,11 +343,11 @@ module tb_tpg_core;
             advance = 1'b1;
 
             for (pixel_index = 0;
-                 pixel_index < TB_PIXELS;
+                 pixel_index < (active_width * active_height);
                  pixel_index = pixel_index + 1) begin
                 check_current_pixel(
-                    pixel_index % TB_WIDTH,
-                    pixel_index / TB_WIDTH,
+                    pixel_index % active_width,
+                    pixel_index / active_width,
                     8'd0
                 );
                 tick;
@@ -502,6 +503,8 @@ module tb_tpg_core;
         pattern_select = PATTERN_BLACK;
         solid_color = 24'hA5_5A_11;
         temporal_step = 8'd1;
+        active_width = TB_WIDTH;
+        active_height = TB_HEIGHT;
 
         tick;
         tick;
@@ -523,8 +526,14 @@ module tb_tpg_core;
         run_static_pattern(PATTERN_CROSSHATCH);
         run_temporal_pattern;
 
+        // Change the active dimensions while idle and verify that the core
+        // adapts its color-bar regions, line endings and final frame pixel.
+        active_width = 16'd80;
+        active_height = 16'd32;
+        run_static_pattern(PATTERN_COLOR_BARS);
+
         $display(
-            "TB PASSED: tpg_core patterns, pacing, backpressure and enable checks passed"
+            "TB PASSED: tpg_core patterns, dynamic size, pacing and enable checks passed"
         );
         $finish;
     end

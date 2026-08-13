@@ -55,6 +55,7 @@ module tpg_axis_wrapper #(
     localparam [4:0] ADDR_TEMPORAL_STEP = 5'h0C;
     localparam [4:0] ADDR_STATUS        = 5'h10;
     localparam [4:0] ADDR_FRAME_PHASE   = 5'h14;
+    localparam [4:0] ADDR_FRAME_SIZE    = 5'h18;
 
     // Internal connection between the TPG core and the AXI output.
     wire [23:0] pixel_rgb;
@@ -79,9 +80,13 @@ module tpg_axis_wrapper #(
     reg [2:0]  requested_pattern;
     reg [23:0] requested_solid_color;
     reg [7:0]  requested_temporal_step;
+    reg [15:0] requested_width;
+    reg [15:0] requested_height;
     reg [2:0]  active_pattern;
     reg [23:0] active_solid_color;
     reg [7:0]  active_temporal_step;
+    reg [15:0] active_width;
+    reg [15:0] active_height;
     reg        config_pending;
 
     // Two-stage synchronizer for the asynchronous VTC frame-sync signal.
@@ -164,9 +169,13 @@ module tpg_axis_wrapper #(
             requested_pattern       <= 3'd2;
             requested_solid_color   <= 24'h00FF00;
             requested_temporal_step <= 8'd1;
+            requested_width         <= G_WIDTH;
+            requested_height        <= G_HEIGHT;
             active_pattern          <= 3'd2;
             active_solid_color      <= 24'h00FF00;
             active_temporal_step    <= 8'd1;
+            active_width            <= G_WIDTH;
+            active_height           <= G_HEIGHT;
             config_pending          <= 1'b0;
         end else begin
             // Apply any pending configuration between frames. The idle check
@@ -175,6 +184,8 @@ module tpg_axis_wrapper #(
                 active_pattern       <= requested_pattern;
                 active_solid_color   <= requested_solid_color;
                 active_temporal_step <= requested_temporal_step;
+                active_width         <= requested_width;
+                active_height        <= requested_height;
                 config_pending       <= 1'b0;
             end
 
@@ -237,6 +248,25 @@ module tpg_axis_wrapper #(
                         end
                     end
 
+                    ADDR_FRAME_SIZE: begin
+                        // Width and height form one configuration value, so
+                        // software must write all four bytes together. Zero
+                        // dimensions are ignored to avoid counter underflow.
+                        if ((wstrb_reg == 4'b1111) &&
+                            (wdata_reg[15:0]  != 16'd0) &&
+                            (wdata_reg[31:16] != 16'd0)) begin
+                            requested_width  <= wdata_reg[15:0];
+                            requested_height <= wdata_reg[31:16];
+
+                            if (core_busy) begin
+                                config_pending <= 1'b1;
+                            end else begin
+                                active_width  <= wdata_reg[15:0];
+                                active_height <= wdata_reg[31:16];
+                            end
+                        end
+                    end
+
                     default: begin
                         // Writes to read-only or undefined addresses are ignored.
                     end
@@ -278,6 +308,9 @@ module tpg_axis_wrapper #(
                     ADDR_FRAME_PHASE:
                         s_axi_rdata <= {24'd0, core_frame_phase};
 
+                    ADDR_FRAME_SIZE:
+                        s_axi_rdata <= {requested_height, requested_width};
+
                     default:
                         s_axi_rdata <= 32'd0;
                 endcase
@@ -291,10 +324,7 @@ module tpg_axis_wrapper #(
     end
 
     // Test-pattern generator core.
-    tpg_core #(
-        .G_WIDTH(G_WIDTH),
-        .G_HEIGHT(G_HEIGHT)
-    ) u_tpg_core (
+    tpg_core u_tpg_core (
         .clk(clk),
         .rst(rst),
         .enable(enable_reg),
@@ -303,6 +333,8 @@ module tpg_axis_wrapper #(
         .pattern_select(active_pattern),
         .solid_color(active_solid_color),
         .temporal_step(active_temporal_step),
+        .active_width(active_width),
+        .active_height(active_height),
         .pixel_rgb(pixel_rgb),
         .pixel_valid(pixel_valid),
         .frame_start(frame_start),
