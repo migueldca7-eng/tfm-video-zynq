@@ -9,10 +9,10 @@ configurable con salida HDMI.
 
 ## Estado actual
 
-La plataforma base está validada físicamente a 640 × 480. En la rama
-`feature/tpg-resolution` también está implementado el cambio coordinado de
-resolución, pendiente todavía de validación física mediante HDMI. El estado
-actual incluye:
+La plataforma está validada físicamente con generación de patrones y entrada
+de cámara a 640 × 480. También está implementado el cambio coordinado de
+resolución, pendiente todavía de una validación física completa en los tres
+perfiles. El estado actual incluye:
 
 - Perfiles de 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
 - Formato RGB888 de 24 bits por píxel.
@@ -22,14 +22,20 @@ actual incluye:
 - AXI VDMA con tres framebuffers almacenados en la DDR.
 - Salida HDMI hacia un monitor.
 - Interfaz AXI4-Lite para configurar el TPG desde el procesador.
+- Entrada de cámara OV7670 en formato RGB888 y resolución VGA.
+- Selector AXI4-Stream entre el TPG y la cámara.
+- Interfaz AXI4-Lite para solicitar y consultar la fuente de vídeo.
 - Aplicación bare-metal con consola de comandos por UART.
 - Actualización de la configuración entre frames completos.
+- Conmutación de fuente únicamente en límites de frame.
 - Reconfiguración coordinada del TPG, la VDMA, el VTC y el Clock Wizard.
 - Tres espacios de 6 MiB reservados en DDR para los framebuffers.
 
-El TPG, el control AXI4-Lite/UART y la cadena fija se han comprobado mediante
-testbenches y pruebas sobre la Zybo Z7-10. El cambio de resolución compila, el
-bitstream cumple timing y queda pendiente de prueba física.
+El TPG, el selector de fuente, el control AXI4-Lite/UART y la cadena integrada
+se han comprobado mediante testbenches y pruebas sobre la Zybo Z7-10. La
+conmutación TPG/cámara se ha validado físicamente mediante HDMI. El cambio de
+resolución compila, el bitstream cumple timing y queda pendiente de una prueba
+física completa de todos los perfiles.
 
 ## Plataforma utilizada
 
@@ -49,8 +55,9 @@ bitstream cumple timing y queda pendiente de prueba física.
 La cadena de vídeo validada es:
 
 ```text
-TPG propio
-  -> AXI4-Stream Video
+TPG propio -----------\
+                       -> Selector AXI4-Stream Video
+Cámara OV7670 -> RGB --/
   -> AXI VDMA S2MM
   -> DDR
   -> AXI VDMA MM2S
@@ -69,7 +76,7 @@ El flujo de control es:
 Terminal serie
   -> Aplicación bare-metal en el PS
   -> AXI4-Lite
-  -> Registros del TPG
+  -> Registros del TPG y del selector de fuente
 ```
 
 El TPG respeta el backpressure AXI4-Stream y solo avanza al siguiente píxel
@@ -118,6 +125,24 @@ La dirección base AXI4-Lite asignada actualmente al TPG es:
 La aplicación y el mapa de registros se documentan en
 [`sw/vitis/README.md`](sw/vitis/README.md).
 
+## Selector de fuente
+
+El selector propio dispone de dos entradas AXI4-Stream Video:
+
+- Fuente 0: TPG.
+- Fuente 1: cámara OV7670.
+
+La fuente se solicita desde software mediante el comando `source <0|1>`. El
+selector no conmuta en mitad de una imagen: termina el frame de la fuente
+activa y espera el `TUSER` que identifica el primer píxel de un frame completo
+de la fuente nueva. Los registros de estado permiten consultar la fuente
+activa y si existe una conmutación pendiente.
+
+La cámara se inicializa mediante I2C/SCCB desde el PS. Tras liberar su reset
+hardware, el software espera 10 ms antes de la primera transacción para que el
+sensor esté preparado. Cuando la cámara deja de utilizarse se activa su modo
+de reposo por software.
+
 ## Cambio coordinado de resolución
 
 La aplicación ofrece tres perfiles cerrados:
@@ -140,10 +165,12 @@ en tiempo de ejecución, sin regenerar el bitstream.
 
 ## Verificación
 
-Se utilizan dos testbenches autocontenibles:
+Se utilizan cuatro testbenches autocontenibles:
 
 - `rtl/tpg/tb/tb_tpg_core.v`
 - `rtl/tpg/tb/tb_tpg_axis_wrapper.v`
+- `rtl/source_selector/tb/tb_source_selector_core.v`
+- `rtl/source_selector/tb/tb_source_selector_axi_wrapper.v`
 
 Las simulaciones comprueban:
 
@@ -157,6 +184,9 @@ Las simulaciones comprueban:
 - Las transacciones de lectura y escritura AXI4-Lite.
 - La aplicación segura de configuración entre frames.
 - Los registros de estado.
+- La conmutación TPG/cámara en límites de frame.
+- El descarte de fragmentos anteriores al siguiente `TUSER`.
+- Las transacciones AXI4-Lite y el estado del selector.
 
 También se han realizado pruebas físicas sobre la placa para verificar:
 
@@ -167,6 +197,8 @@ También se han realizado pruebas físicas sobre la placa para verificar:
 - Deshabilitación y reactivación del TPG.
 - Lectura de registros mediante el comando `status`.
 - Rechazo de comandos UART incorrectos.
+- Inicialización y control de reposo de la cámara OV7670.
+- Conmutación física TPG/cámara con salida HDMI correcta.
 
 Todas estas pruebas se han superado correctamente.
 
@@ -191,6 +223,9 @@ tfm-video-zynq/
 |   `-- planning/
 |-- rtl/
 |   |-- common/
+|   |-- source_selector/
+|   |   |-- src/
+|   |   `-- tb/
 |   `-- tpg/
 |       |-- src/
 |       `-- tb/
@@ -258,10 +293,9 @@ feature/*  desarrollo aislado de cada funcionalidad
 
 El desarrollo previsto continúa con:
 
-1. Validación física y cierre del cambio coordinado de resolución.
-2. Selector de fuente entre el TPG y la entrada de cámara.
-3. Bloque de procesado HLS con selección de bypass.
-4. Pruebas integrales y documentación final.
+1. Validación física completa del cambio coordinado de resolución.
+2. Bloque de procesado HLS con selección de bypass.
+3. Pruebas integrales, comparación de recursos y documentación final.
 
 Como ampliaciones opcionales se consideran:
 

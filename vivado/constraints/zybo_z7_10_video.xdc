@@ -1,4 +1,4 @@
-# Zybo Z7-10 constraints for the validated TPG-VDMA-HDMI design.
+    # Zybo Z7-10 constraints for the validated TPG-VDMA-HDMI design.
 #
 # The camera video-data interface has been removed from this revision.
 # Some legacy camera control ports remain present in the Block Design and
@@ -52,6 +52,26 @@ set_property IOSTANDARD LVCMOS33 [get_ports {pclk}]
 
 set_property PACKAGE_PIN T15 [get_ports {xclk}]
 set_property IOSTANDARD LVCMOS33 [get_ports {xclk}]
+
+# -----------------------------------------------------------------------------
+# OV7670 parallel video input
+# -----------------------------------------------------------------------------
+
+set_property PACKAGE_PIN W15 [get_ports {datain[0]}]
+set_property PACKAGE_PIN Y14 [get_ports {datain[1]}]
+set_property PACKAGE_PIN T11 [get_ports {datain[2]}]
+set_property PACKAGE_PIN T12 [get_ports {datain[3]}]
+set_property PACKAGE_PIN T10 [get_ports {datain[4]}]
+set_property PACKAGE_PIN U12 [get_ports {datain[5]}]
+set_property PACKAGE_PIN V18 [get_ports {datain[6]}]
+set_property PACKAGE_PIN P14 [get_ports {datain[7]}]
+
+set_property PACKAGE_PIN R14 [get_ports {href}]
+set_property PACKAGE_PIN V17 [get_ports {vsync}]
+
+set_property IOSTANDARD LVCMOS33 [get_ports {datain[*]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {href}]
+set_property IOSTANDARD LVCMOS33 [get_ports {vsync}]
 
 # -----------------------------------------------------------------------------
 # Legacy camera I2C interface still enabled in the Processing System
