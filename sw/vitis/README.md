@@ -1,8 +1,8 @@
 # Software de control de vídeo
 
 Este directorio contiene el software bare-metal ejecutado por el procesador ARM
-del Zynq para inicializar la cadena de vídeo y controlar el Test Pattern
-Generator mediante AXI4-Lite.
+del Zynq para inicializar la cadena de vídeo, controlar el Test Pattern
+Generator y seleccionar entre el TPG y una cámara OV7670 mediante AXI4-Lite.
 
 El software se ha desarrollado y probado con Xilinx SDK 2019.1 sobre una
 Zybo Z7-10.
@@ -21,18 +21,19 @@ fuente necesario para reconstruir la aplicación.
 ## Cadena de vídeo controlada
 
 ```text
-TPG RTL
-  -> AXI4-Stream S2MM
-  -> AXI VDMA
+TPG RTL --------------------\
+                              -> Selector AXI4-Stream
+OV7670 -> Video In to AXI4S --/
+  -> AXI VDMA S2MM
   -> DDR
   -> AXI VDMA MM2S
   -> AXI4-Stream Video Out
   -> HDMI
 ```
 
-La cadena fija está validada físicamente a 640 × 480. El software también
-incluye tres perfiles de resolución seleccionables, cuya conmutación física
-queda pendiente de validación:
+La cadena y la conmutación entre el TPG y la cámara están validadas físicamente
+a 640 × 480. El software también incluye tres perfiles de resolución
+seleccionables, cuya validación física completa queda pendiente:
 
 - Modo 0: 640 × 480p60, reloj de píxel nominal de 25 MHz.
 - Modo 1: 1280 × 720p60, reloj de píxel nominal de 74,25 MHz.
@@ -58,7 +59,12 @@ Durante el arranque, el programa:
 9. Configura y habilita el VTC para el modo inicial.
 10. Configura el TPG para 640 × 480 y carga sus parámetros iniciales.
 11. Habilita el generador.
-12. Entra en un bucle de recepción de comandos por UART.
+12. Selecciona el TPG como fuente inicial.
+13. Entra en un bucle de recepción de comandos por UART.
+
+La cámara se inicializa bajo demanda la primera vez que se ejecuta `source 1`.
+De esta forma, el arranque normal con el TPG no depende de que el sensor esté
+conectado.
 
 Los valores iniciales configurados por la aplicación son:
 
@@ -135,6 +141,35 @@ La aplicación define `TPG_BASEADDR` en `main.c`. Si se modifica la asignación
 del Address Editor o el script Tcl, esta constante debe actualizarse para que
 coincida con la nueva dirección.
 
+## Interfaz AXI4-Lite del selector de fuente
+
+El selector está conectado al mismo AXI Interconnect que el resto de
+periféricos de control. Su dirección base, generada por el BSP, es:
+
+```text
+SOURCE_SELECTOR_BASEADDR = 0x43C20000
+```
+
+| Offset | Nombre | Acceso | Contenido |
+|---:|---|:---:|---|
+| `0x00` | `SOURCE_CONTROL` | R/W | Bit 0: fuente solicitada; 0 = TPG, 1 = cámara |
+| `0x04` | `SOURCE_STATUS` | R | Bit 0: fuente activa; bit 1: cambio pendiente |
+
+La escritura del registro de control solo solicita el cambio. El selector
+mantiene la fuente anterior hasta alcanzar un límite seguro de frame y espera
+el `TUSER` de la nueva fuente antes de hacerla activa.
+
+## Control de la cámara OV7670
+
+El PS configura el sensor mediante el controlador I2C/SCCB y gobierna su reset
+hardware mediante GPIO. Tras liberar el reset, la aplicación espera 10 ms
+antes de la primera transacción para evitar accesos mientras el sensor todavía
+está arrancando.
+
+La cámara se configura en VGA RGB888. Al dejar de ser la fuente activa, el
+software activa su modo de reposo mediante el registro `COM2`; al volver a
+seleccionarla, la reactiva y espera a que entregue vídeo estable.
+
 ## Consola UART
 
 La aplicación ofrece una consola interactiva mediante UART.
@@ -181,6 +216,9 @@ Muestra:
 - Nombre del modo activo.
 - Resolución activa.
 - Reloj de píxel nominal.
+- Fuente solicitada y fuente activa.
+- Estado pendiente del selector.
+- Estado de inicialización y habilitación de la cámara.
 
 ### Habilitar o deshabilitar el TPG
 
@@ -277,6 +315,26 @@ Todas las esperas por polling tienen timeout. Si falla una operación, el modo
 activo no se actualiza y el TPG permanece deshabilitado para evitar una cadena
 parcialmente configurada.
 
+### Seleccionar la fuente de vídeo
+
+```text
+source <0|1>
+```
+
+| Valor | Fuente |
+|---:|---|
+| 0 | TPG |
+| 1 | Cámara OV7670 |
+
+Para pasar a la cámara, el software fuerza primero el modo VGA, inicializa o
+reactiva el sensor y solicita el cambio al selector. El TPG continúa hasta que
+el selector confirma que la cámara ha comenzado por un `TUSER`; solo entonces
+se deshabilita el TPG.
+
+Para volver al TPG, se habilita primero el generador, se espera la confirmación
+del selector y después se pone la cámara en reposo. Así nunca se apaga la
+fuente anterior antes de disponer de un frame completo de la nueva.
+
 ## Validación de comandos
 
 Antes de escribir cualquier registro, la aplicación comprueba:
@@ -297,6 +355,7 @@ enable 2
 color 0x1000000
 step 256
 resolution 3
+source 2
 pattern hola
 status extra
 ```
@@ -338,8 +397,8 @@ VDMA MM2S/read running
 Video pipeline running
 ```
 
-Después puede utilizarse `status`, cambiar el patrón y solicitar otro perfil
-mediante `resolution`.
+Después puede utilizarse `status`, cambiar el patrón, solicitar otro perfil
+mediante `resolution` o seleccionar la fuente mediante `source`.
 
 ## Pruebas realizadas
 
@@ -354,6 +413,11 @@ La aplicación y la interfaz AXI4-Lite se han validado físicamente comprobando:
 - Deshabilitación al finalizar el frame activo.
 - Reinicio de la rampa temporal tras volver a habilitar el TPG.
 - Rechazo de comandos y valores incorrectos.
+- Inicialización de la OV7670 mediante I2C/SCCB.
+- Entrada y salida del modo de reposo de la cámara.
+- Lectura de la fuente solicitada, activa y pendiente.
+- Conmutaciones `source 0` y `source 1` en límites de frame.
+- Imagen correcta de ambas fuentes en un monitor HDMI.
 
 Todas las pruebas se han superado correctamente.
 
@@ -372,8 +436,6 @@ monitor HDMI mediante esta secuencia mínima:
 Esta versión todavía no incluye:
 
 - Validación física del cambio dinámico de resolución.
-- Selector de fuente de vídeo.
-- Entrada de cámara integrada en la cadena final.
 - Procesado HLS.
 - Selector HLS/bypass.
 - Interfaz gráfica de control.

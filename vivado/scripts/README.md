@@ -11,8 +11,9 @@ Zybo Z7-10 utilizando Vivado 2019.1.
 La cadena de vídeo es:
 
 ```text
-TPG propio
-  -> AXI4-Stream
+TPG propio ----------------------\
+                                  -> Selector AXI4-Stream
+OV7670 -> Video In to AXI4-Stream-/
   -> AXI VDMA S2MM
   -> DDR del Zynq
   -> AXI VDMA MM2S
@@ -21,12 +22,12 @@ TPG propio
   -> Monitor
 ```
 
-La configuración del TPG sigue el camino:
+La configuración del TPG y del selector sigue el camino:
 
 ```text
 PS M_AXI_GP0
   -> AXI Interconnect
-  -> AXI4-Lite del TPG
+  -> AXI4-Lite del TPG y del selector
 ```
 
 El TPG recibe además la señal `fsync_out` del Video Timing Controller. Esta
@@ -36,15 +37,20 @@ comenzar un nuevo frame.
 ## Configuración actual
 
 - Dispositivo: `xc7z010clg400-1`.
-- Resolución: 640 × 480.
+- Perfiles: 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
 - Formato de vídeo: RGB888.
 - Reloj AXI, VDMA y TPG: FCLK0 del PS.
-- Reloj de píxel: 25 MHz.
+- Reloj de píxel reconfigurable: 25 MHz o 74,25 MHz.
+- Reloj HDMI 5× reconfigurable: 125 MHz o 371,25 MHz.
+- Reloj XCLK de la cámara: 24 MHz.
 - Tres frame stores en el AXI VDMA.
 - Puerto HP0 del PS para acceder a la DDR.
 - Puerto GP0 del PS para controlar los periféricos AXI4-Lite.
 - Dirección AXI4-Lite del TPG: `0x41220000`.
 - Tamaño del segmento AXI del TPG: `0x00010000`.
+- Dirección AXI4-Lite del selector: `0x43C20000`.
+- Tamaño del segmento AXI del selector: `0x00010000`.
+- Cámara OV7670 configurada en VGA RGB888 desde el software del PS.
 
 ## Requisitos
 
@@ -64,6 +70,12 @@ vivado/ip/hdmi_tx_1.0/
 Por tanto, no es necesario añadir manualmente otro repositorio de IP para ese
 bloque.
 
+El IP de captura de la cámara OV7670 también forma parte del repositorio:
+
+```text
+vivado/ip/OV7670Ip/
+```
+
 Para ejecutar posteriormente el software también se necesita:
 
 - Xilinx SDK 2019.1.
@@ -81,8 +93,11 @@ El script utiliza los siguientes elementos del repositorio:
 vivado/scripts/create_project.tcl
 vivado/constraints/zybo_z7_10_video.xdc
 vivado/ip/hdmi_tx_1.0/
+vivado/ip/OV7670Ip/
 rtl/tpg/src/tpg_core.v
 rtl/tpg/src/tpg_axis_wrapper.v
+rtl/source_selector/src/source_selector_core.v
+rtl/source_selector/src/source_selector_axi_wrapper.v
 ```
 
 No utiliza los archivos del proyecto original almacenados en `work/`.
@@ -149,12 +164,13 @@ Una vez generado el proyecto:
 1. Abrir el archivo `.xpr`.
 2. Comprobar que aparece el Block Design `design_1`.
 3. Ejecutar `Validate Design`.
-4. Comprobar que el TPG está conectado a `S_AXIS_S2MM`.
-5. Comprobar que `M03_AXI` del interconnect llega al puerto AXI4-Lite del TPG.
-6. Comprobar que `fsync_out` del VTC llega a `frame_sync_async`.
-7. Abrir el Address Editor.
-8. Verificar que el TPG está situado en `0x41220000`.
-9. Comprobar que no existen IP bloqueadas ni referencias a módulos ausentes.
+4. Comprobar que el TPG y la cámara llegan a las dos entradas del selector.
+5. Comprobar que la salida del selector está conectada a `S_AXIS_S2MM`.
+6. Comprobar que `M03_AXI` llega al TPG y `M06_AXI` al selector.
+7. Comprobar que `fsync_out` del VTC llega a `frame_sync_async`.
+8. Abrir el Address Editor.
+9. Verificar las direcciones `0x41220000` del TPG y `0x43C20000` del selector.
+10. Comprobar que el IP `OV7670Ip` está resuelto y no existen módulos ausentes.
 
 ## Simulación del TPG
 
@@ -195,6 +211,34 @@ El resultado correcto termina con:
 ```text
 TB PASSED: AXI-Lite control, frame-safe updates and video checks passed
 ```
+
+## Simulación del selector de fuente
+
+Los testbenches se encuentran en:
+
+```text
+rtl/source_selector/tb/tb_source_selector_core.v
+rtl/source_selector/tb/tb_source_selector_axi_wrapper.v
+```
+
+### Core
+
+```powershell
+xvlog rtl/source_selector/src/source_selector_core.v rtl/source_selector/tb/tb_source_selector_core.v
+xelab tb_source_selector_core -s tb_source_selector_core_sim
+xsim tb_source_selector_core_sim -runall
+```
+
+### Wrapper AXI4-Stream y AXI4-Lite
+
+```powershell
+xvlog rtl/source_selector/src/source_selector_core.v rtl/source_selector/src/source_selector_axi_wrapper.v rtl/source_selector/tb/tb_source_selector_axi_wrapper.v
+xelab tb_source_selector_axi_wrapper -s tb_source_selector_axi_wrapper_sim
+xsim tb_source_selector_axi_wrapper_sim -runall
+```
+
+Estas simulaciones comprueban las transiciones TPG/cámara en límites de frame,
+el backpressure, el descarte de fragmentos incompletos y los registros AXI4-Lite.
 
 ## Generación del bitstream
 
@@ -239,11 +283,13 @@ Después de programar la FPGA y ejecutar la aplicación:
 - El monitor debe mostrar inicialmente las barras de color.
 - La terminal UART debe mostrar el prompt `tpg>`.
 - Los patrones deben poder cambiarse mediante comandos.
+- Los comandos `source 0` y `source 1` deben seleccionar el TPG y la cámara.
 - Los cambios deben aplicarse sin dividir el frame visible.
-- El comando `status` debe mostrar los registros del TPG.
+- El comando `status` debe mostrar los registros del TPG y del selector.
 
 Este comportamiento confirma el funcionamiento conjunto del TPG, AXI4-Stream,
-AXI4-Lite, AXI VDMA, DDR, PS, software, Video Timing Controller y salida HDMI.
+selector de fuente, entrada OV7670, AXI4-Lite, AXI VDMA, DDR, PS, software,
+Video Timing Controller y salida HDMI.
 
 ## Archivos generados
 
