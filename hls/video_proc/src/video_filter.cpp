@@ -73,12 +73,52 @@ static void advance_buffer_index(ap_uint<10>& buffer_index)
 }
 
 /*
- * Convierte un pixel RGB a intensidad para la ruta Sobel. Se mantiene
- * separada de apply_filter para no modificar los modos ya validados.
+ * Primera etapa registrada del arbol de sumas de luminancia.
+ * Mantener esta funcion fuera de linea crea una frontera de planificacion:
+ * recibe dos productos y entrega su suma un ciclo despues, admitiendo una
+ * operacion nueva en cada ciclo.
  */
-static ap_uint<8> sobel_rgb_to_gray(pixel_t pixel_in)
+static ap_uint<16> add_gray_stage_1(
+    ap_uint<16> operand_a,
+    ap_uint<16> operand_b
+)
 {
-#pragma HLS INLINE
+#pragma HLS INLINE off
+#pragma HLS PIPELINE II=1
+#pragma HLS LATENCY min=1 max=1
+
+    return operand_a + operand_b;
+}
+
+/*
+ * Segunda etapa registrada del arbol de sumas de luminancia.
+ * Se utiliza una funcion distinta para que HLS genere una segunda instancia
+ * y no intente compartir el mismo sumador entre dos operaciones por pixel.
+ */
+static ap_uint<16> add_gray_stage_2(
+    ap_uint<16> operand_a,
+    ap_uint<16> operand_b
+)
+{
+#pragma HLS INLINE off
+#pragma HLS PIPELINE II=1
+#pragma HLS LATENCY min=1 max=1
+
+    return operand_a + operand_b;
+}
+
+/*
+ * Convierte un pixel RGB888 en una intensidad de ocho bits.
+ * Los coeficientes aproximan la luminancia mediante una division por 256:
+ * gray = (77*R + 150*G + 29*B) / 256.
+ *
+ * Esta funcion es comun a los modos grayscale y Sobel para mantener una
+ * unica implementacion de la conversion RGB a gris en el codigo fuente.
+ */
+static ap_uint<8> rgb_to_gray(pixel_t pixel_in)
+{
+#pragma HLS INLINE off
+#pragma HLS PIPELINE II=1
 
     const ap_uint<8> red   = pixel_in.range(23, 16);
     const ap_uint<8> green = pixel_in.range(15, 8);
@@ -91,19 +131,20 @@ static ap_uint<8> sobel_rgb_to_gray(pixel_t pixel_in)
     ap_uint<16> weighted_red;
     ap_uint<16> weighted_green;
     ap_uint<16> weighted_blue;
+    ap_uint<16> partial_sum;
     ap_uint<16> weighted_sum;
 
-#pragma HLS RESOURCE variable=weighted_red   latency=2
-#pragma HLS RESOURCE variable=weighted_green latency=2
-#pragma HLS RESOURCE variable=weighted_blue  latency=2
-
+    /* Primera etapa: calcular en paralelo la aportacion de cada canal. */
     weighted_red   = red   * RED_COEFFICIENT;
     weighted_green = green * GREEN_COEFFICIENT;
     weighted_blue  = blue  * BLUE_COEFFICIENT;
 
-    weighted_sum = weighted_red
-                 + weighted_green
-                 + weighted_blue;
+    /*
+     * Segunda y tercera etapas: registrar cada suma por separado para
+     * evitar que HLS fusione una multiplicacion y una suma en el mismo DSP.
+     */
+    partial_sum  = add_gray_stage_1(weighted_red, weighted_green);
+    weighted_sum = add_gray_stage_2(partial_sum, weighted_blue);
 
     return (ap_uint<8>)(weighted_sum >> 8);
 }
@@ -238,46 +279,12 @@ static pixel_t apply_filter(
     filter_mode_t mode
 )
 {
-
-
-    ap_uint<8> red;
-    ap_uint<8> green;
-    ap_uint<8> blue;
     ap_uint<8> gray;
-
-    ap_uint<16> weighted_red;
-    ap_uint<16> weighted_green;
-    ap_uint<16> weighted_blue;
-    ap_uint<16> weighted_sum;
-
-#pragma HLS RESOURCE variable=weighted_red  latency=2
-#pragma HLS RESOURCE variable=weighted_green latency=2
-#pragma HLS RESOURCE variable=weighted_blue latency=2
-
-
-
-
     pixel_t pixel_out;
-
-    const ap_uint<8> RED_COEFFICIENT   = 77;
-    const ap_uint<8> GREEN_COEFFICIENT = 150;
-    const ap_uint<8> BLUE_COEFFICIENT  = 29;
-
-    red   = pixel_in.range(23, 16);
-    green = pixel_in.range(15, 8);
-    blue  = pixel_in.range(7, 0);
 
     switch (mode.to_uint()) {
     case FILTER_GRAYSCALE:
-        weighted_red   = red   * RED_COEFFICIENT;
-        weighted_green = green * GREEN_COEFFICIENT;
-        weighted_blue  = blue  * BLUE_COEFFICIENT;
-
-        weighted_sum = weighted_red
-                     + weighted_green
-                     + weighted_blue;
-
-        gray = weighted_sum >> 8;
+        gray = rgb_to_gray(pixel_in);
 
         pixel_out.range(23, 16) = gray;
         pixel_out.range(15, 8)  = gray;
@@ -411,7 +418,7 @@ void video_filter(
              * acceso a los buffers de linea y evita duplicar esta logica al
              * desplegar la funcion inline.
              */
-            current_gray = sobel_rgb_to_gray(input_packet.data);
+            current_gray = rgb_to_gray(input_packet.data);
 
             sobel_valid = sobel_step(
                 current_gray,
