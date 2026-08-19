@@ -71,6 +71,14 @@
 #define SOURCE_SELECTOR_PENDING_MASK   0x00000002U
 #define SOURCE_SWITCH_TIMEOUT_MS       1000U
 
+/*
+ * Mapa de registros del wrapper AXI-Lite del filtro de video. El software
+ * solicita un modo y el core HLS lo aplica al comienzo del siguiente frame.
+ */
+#define VIDEO_FILTER_BASEADDR       XPAR_VIDEO_FILTER_AXI_CON_0_BASEADDR
+#define VIDEO_FILTER_CONTROL_OFFSET 0x00U
+#define VIDEO_FILTER_MODE_MAX       2U
+
 /* Configuracion fija de la camara OV7670 utilizada en el proyecto base. */
 #define CAMERA_IIC_DEVICE_ID         XPAR_XIICPS_0_DEVICE_ID
 #define CAMERA_RESET_DEVICE_ID       XPAR_RESETCAM_DEVICE_ID
@@ -1322,6 +1330,7 @@ static void print_tpg_help(void)
     xil_printf("  step <0..255>        Set the temporal-ramp step\r\n");
     xil_printf("  resolution <0..2>    Select the video resolution\r\n");
     xil_printf("  source <0|1>         Select 0 TPG or 1 camera\r\n");
+    xil_printf("  filter <0..2>        Select 0 bypass, 1 grayscale or 2 Sobel\r\n");
     xil_printf("Patterns:\r\n");
     xil_printf("  0 black, 1 solid, 2 bars, 3 horizontal ramp\r\n");
     xil_printf("  4 vertical ramp, 5 checkerboard, 6 grid, 7 temporal ramp\r\n");
@@ -1465,7 +1474,8 @@ static void process_command(char *CommandLine)
         (strcmp(Command, "color") == 0) ||
         (strcmp(Command, "step") == 0) ||
         (strcmp(Command, "resolution") == 0) ||
-        (strcmp(Command, "source") == 0)) {
+        (strcmp(Command, "source") == 0) ||
+        (strcmp(Command, "filter") == 0)) {
 
         if (Argument == NULL) {
             xil_printf("ERROR: missing argument\r\n");
@@ -1546,6 +1556,24 @@ static void process_command(char *CommandLine)
                 return;
             }
 
+            return;
+        }
+
+        if (strcmp(Command, "filter") == 0) {
+            if (Value > VIDEO_FILTER_MODE_MAX) {
+                xil_printf("ERROR: filter must be between 0 and 2\r\n");
+                return;
+            }
+
+            /*
+             * El core conserva el modo activo durante todo el frame actual y
+             * aplica esta peticion al recibir el TUSER del frame siguiente.
+             */
+            Xil_Out32(
+                VIDEO_FILTER_BASEADDR + VIDEO_FILTER_CONTROL_OFFSET,
+                (u32)Value
+            );
+            xil_printf("Video filter requested: %d\r\n", (u32)Value);
             return;
         }
 

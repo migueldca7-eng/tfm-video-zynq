@@ -23,6 +23,9 @@ perfiles. El estado actual incluye:
 - Salida HDMI hacia un monitor.
 - Interfaz AXI4-Lite para configurar el TPG desde el procesador.
 - Entrada de cámara OV7670 en formato RGB888 y resolución VGA.
+- Procesador de vídeo desarrollado con Vivado HLS.
+- Modos bypass, escala de grises y detección de bordes Sobel.
+- Interfaz AXI4-Lite para seleccionar y consultar el filtro activo.
 - Selector AXI4-Stream entre el TPG y la cámara.
 - Interfaz AXI4-Lite para solicitar y consultar la fuente de vídeo.
 - Aplicación bare-metal con consola de comandos por UART.
@@ -31,11 +34,12 @@ perfiles. El estado actual incluye:
 - Reconfiguración coordinada del TPG, la VDMA, el VTC y el Clock Wizard.
 - Tres espacios de 6 MiB reservados en DDR para los framebuffers.
 
-El TPG, el selector de fuente, el control AXI4-Lite/UART y la cadena integrada
-se han comprobado mediante testbenches y pruebas sobre la Zybo Z7-10. La
-conmutación TPG/cámara se ha validado físicamente mediante HDMI. El cambio de
-resolución compila, el bitstream cumple timing y queda pendiente de una prueba
-física completa de todos los perfiles.
+El TPG, el selector de fuente, el procesador HLS, el control AXI4-Lite/UART y
+la cadena integrada se han comprobado mediante testbenches y pruebas sobre la
+Zybo Z7-10. La conmutación TPG/cámara y los tres modos del filtro HLS se han
+validado físicamente mediante HDMI. El cambio de resolución compila, el
+bitstream cumple timing y queda pendiente de una prueba física completa de
+todos los perfiles.
 
 ## Plataforma utilizada
 
@@ -55,9 +59,9 @@ física completa de todos los perfiles.
 La cadena de vídeo validada es:
 
 ```text
-TPG propio -----------\
-                       -> Selector AXI4-Stream Video
-Cámara OV7670 -> RGB --/
+TPG propio ------------------------------\
+                                          -> Selector AXI4-Stream Video
+Cámara OV7670 -> RGB -> Procesador HLS ---/
   -> AXI VDMA S2MM
   -> DDR
   -> AXI VDMA MM2S
@@ -76,7 +80,7 @@ El flujo de control es:
 Terminal serie
   -> Aplicación bare-metal en el PS
   -> AXI4-Lite
-  -> Registros del TPG y del selector de fuente
+  -> Registros del TPG, del selector de fuente y del filtro HLS
 ```
 
 El TPG respeta el backpressure AXI4-Stream y solo avanza al siguiente píxel
@@ -143,6 +147,39 @@ hardware, el software espera 10 ms antes de la primera transacción para que el
 sensor esté preparado. Cuando la cámara deja de utilizarse se activa su modo
 de reposo por software.
 
+## Procesado de vídeo HLS
+
+La rama de cámara incluye un acelerador desarrollado con Vivado HLS 2019.1.
+El TPG entra directamente en el selector de fuente, por lo que sus patrones no
+se procesan. La cadena de cámara es:
+
+```text
+OV7670 -> Video In to AXI4-Stream -> Filtro HLS -> Selector de fuente
+```
+
+El acelerador admite tres modos:
+
+| Identificador | Modo | Operación |
+|---:|---|---|
+| 0 | Bypass | Conserva el píxel RGB888 original |
+| 1 | Escala de grises | Calcula luminancia y replica el resultado en R, G y B |
+| 2 | Sobel | Detecta bordes sobre la intensidad en escala de grises |
+
+El modo se solicita mediante AXI4-Lite y se aplica al aceptar el `TUSER` del
+siguiente frame. De esta forma nunca se mezclan dos filtros dentro de una
+misma imagen. El core devuelve el modo activo y un indicador `pending`.
+
+El filtro Sobel utiliza dos buffers de línea y una ventana 3 × 3. Está
+dimensionado para la entrada VGA de la OV7670, 640 × 480, y genera en negro los
+bordes que no disponen de los nueve vecinos necesarios. Los metadatos
+AXI4-Stream permanecen alineados con los píxeles durante las fases de llenado,
+procesamiento y vaciado del pipeline.
+
+La dirección base del wrapper de control es `0x43C30000`. La implementación
+HLS alcanza un intervalo de iniciación de un ciclo y cumple el objetivo de 150
+MHz. El diseño y sus pruebas se describen en
+[`hls/video_proc/README.md`](hls/video_proc/README.md).
+
 ## Cambio coordinado de resolución
 
 La aplicación ofrece tres perfiles cerrados:
@@ -165,12 +202,15 @@ en tiempo de ejecución, sin regenerar el bitstream.
 
 ## Verificación
 
-Se utilizan cuatro testbenches autocontenibles:
+Se utilizan testbenches autocontenibles para RTL y HLS:
 
 - `rtl/tpg/tb/tb_tpg_core.v`
 - `rtl/tpg/tb/tb_tpg_axis_wrapper.v`
 - `rtl/source_selector/tb/tb_source_selector_core.v`
 - `rtl/source_selector/tb/tb_source_selector_axi_wrapper.v`
+- `rtl/video_filter/tb/tb_video_filter_axi_control.v`
+- `hls/video_proc/tb/tb_video_filter.cpp`
+- `hls/video_proc/rtl_tb/tb_video_filter_rtl.sv`
 
 Las simulaciones comprueban:
 
@@ -187,6 +227,12 @@ Las simulaciones comprueban:
 - La conmutación TPG/cámara en límites de frame.
 - El descarte de fragmentos anteriores al siguiente `TUSER`.
 - Las transacciones AXI4-Lite y el estado del selector.
+- Los modos bypass, escala de grises y Sobel.
+- Los cambios de filtro únicamente al comienzo de un frame.
+- El llenado y vaciado de los buffers de Sobel.
+- La alineación de `TDATA`, `TUSER`, `TLAST`, `TKEEP` y `TSTRB`.
+- El backpressure a la salida del acelerador HLS.
+- La interfaz AXI4-Lite y los modos inválidos del filtro.
 
 También se han realizado pruebas físicas sobre la placa para verificar:
 
@@ -199,6 +245,8 @@ También se han realizado pruebas físicas sobre la placa para verificar:
 - Rechazo de comandos UART incorrectos.
 - Inicialización y control de reposo de la cámara OV7670.
 - Conmutación física TPG/cámara con salida HDMI correcta.
+- Selección dinámica de bypass, escala de grises y Sobel sobre la cámara.
+- Recuperación de la imagen original al regresar al modo bypass.
 
 Todas estas pruebas se han superado correctamente.
 
@@ -267,7 +315,7 @@ Se versionan:
 - Código RTL.
 - Testbenches.
 - Código C de la aplicación.
-- Código HLS cuando se implemente.
+- Código HLS y el IP exportado necesario para reconstruir el diseño.
 - Constraints.
 - IP propio necesario para reconstruir el hardware.
 - Scripts Tcl.
@@ -294,8 +342,8 @@ feature/*  desarrollo aislado de cada funcionalidad
 El desarrollo previsto continúa con:
 
 1. Validación física completa del cambio coordinado de resolución.
-2. Bloque de procesado HLS con selección de bypass.
-3. Pruebas integrales, comparación de recursos y documentación final.
+2. Pruebas integrales y comparación de recursos.
+3. Redacción y revisión de la documentación final.
 
 Como ampliaciones opcionales se consideran:
 
