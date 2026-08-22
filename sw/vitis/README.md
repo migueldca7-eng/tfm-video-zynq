@@ -2,7 +2,8 @@
 
 Este directorio contiene el software bare-metal ejecutado por el procesador ARM
 del Zynq para inicializar la cadena de vídeo, controlar el Test Pattern
-Generator y seleccionar entre el TPG y una cámara OV7670 mediante AXI4-Lite.
+Generator, seleccionar entre el TPG y una cámara OV7670 y configurar el
+procesador de vídeo HLS mediante AXI4-Lite.
 
 El software se ha desarrollado y probado con Xilinx SDK 2019.1 sobre una
 Zybo Z7-10.
@@ -21,9 +22,9 @@ fuente necesario para reconstruir la aplicación.
 ## Cadena de vídeo controlada
 
 ```text
-TPG RTL --------------------\
-                              -> Selector AXI4-Stream
-OV7670 -> Video In to AXI4S --/
+TPG RTL ---------------------------------\
+                                         -> Selector AXI4-Stream
+OV7670 -> Video In to AXI4S -> Filtro HLS/
   -> AXI VDMA S2MM
   -> DDR
   -> AXI VDMA MM2S
@@ -31,9 +32,8 @@ OV7670 -> Video In to AXI4S --/
   -> HDMI
 ```
 
-La cadena y la conmutación entre el TPG y la cámara están validadas físicamente
-a 640 × 480. El software también incluye tres perfiles de resolución
-seleccionables, cuya validación física completa queda pendiente:
+La cadena, la conmutación entre el TPG y la cámara y los tres perfiles de
+resolución seleccionables están validados físicamente mediante HDMI:
 
 - Modo 0: 640 × 480p60, reloj de píxel nominal de 25 MHz.
 - Modo 1: 1280 × 720p60, reloj de píxel nominal de 74,25 MHz.
@@ -61,6 +61,10 @@ Durante el arranque, el programa:
 11. Habilita el generador.
 12. Selecciona el TPG como fuente inicial.
 13. Entra en un bucle de recepción de comandos por UART.
+
+El wrapper AXI4-Lite del filtro y el core HLS se reinician en modo bypass. La
+aplicación no necesita realizar una escritura inicial para obtener la imagen
+original de la cámara.
 
 La cámara se inicializa bajo demanda la primera vez que se ejecuta `source 1`.
 De esta forma, el arranque normal con el TPG no depende de que el sensor esté
@@ -169,6 +173,28 @@ está arrancando.
 La cámara se configura en VGA RGB888. Al dejar de ser la fuente activa, el
 software activa su modo de reposo mediante el registro `COM2`; al volver a
 seleccionarla, la reactiva y espera a que entregue vídeo estable.
+
+## Interfaz AXI4-Lite del filtro HLS
+
+El wrapper de control convierte las transacciones AXI4-Lite del PS en señales
+discretas para el core HLS. La dirección base generada por el BSP es:
+
+```text
+VIDEO_FILTER_BASEADDR = 0x43C30000
+```
+
+| Offset | Nombre | Acceso | Contenido |
+|---:|---|:---:|---|
+| `0x00` | `FILTER_CONTROL` | R/W | Bits 1:0: modo solicitado |
+| `0x04` | `FILTER_STATUS` | R | Bits 1:0: modo activo; bit 2: cambio pendiente |
+
+Los modos válidos son 0 para bypass, 1 para escala de grises y 2 para Sobel.
+El valor 3 es rechazado por el wrapper y deja intacta la configuración. El
+core aplica una petición válida al aceptar el `TUSER` del frame siguiente.
+
+El filtro está situado únicamente en la rama de cámara, antes del selector de
+fuente. Por ello, el comando no modifica los patrones procedentes del TPG. El
+modo Sobel está dimensionado para la imagen VGA de 640 × 480 de la OV7670.
 
 ## Consola UART
 
@@ -335,6 +361,30 @@ Para volver al TPG, se habilita primero el generador, se espera la confirmación
 del selector y después se pone la cámara en reposo. Así nunca se apaga la
 fuente anterior antes de disponer de un frame completo de la nueva.
 
+### Seleccionar el filtro de vídeo
+
+```text
+filter <0..2>
+```
+
+| Valor | Modo |
+|---:|---|
+| 0 | Bypass: imagen RGB888 original |
+| 1 | Escala de grises |
+| 2 | Detección de bordes Sobel |
+
+Ejemplo:
+
+```text
+source 1
+filter 2
+```
+
+La aplicación valida el argumento y escribe el modo solicitado en
+`FILTER_CONTROL`. El cambio se completa al comenzar el siguiente frame, por lo
+que la pantalla no contiene regiones procesadas con filtros diferentes. Para
+observar el resultado debe estar seleccionada la cámara mediante `source 1`.
+
 ## Validación de comandos
 
 Antes de escribir cualquier registro, la aplicación comprueba:
@@ -356,6 +406,7 @@ color 0x1000000
 step 256
 resolution 3
 source 2
+filter 3
 pattern hola
 status extra
 ```
@@ -398,7 +449,8 @@ Video pipeline running
 ```
 
 Después puede utilizarse `status`, cambiar el patrón, solicitar otro perfil
-mediante `resolution` o seleccionar la fuente mediante `source`.
+mediante `resolution`, seleccionar la fuente mediante `source` o procesar la
+cámara mediante `filter`.
 
 ## Pruebas realizadas
 
@@ -418,26 +470,21 @@ La aplicación y la interfaz AXI4-Lite se han validado físicamente comprobando:
 - Lectura de la fuente solicitada, activa y pendiente.
 - Conmutaciones `source 0` y `source 1` en límites de frame.
 - Imagen correcta de ambas fuentes en un monitor HDMI.
+- Selección de los modos bypass, escala de grises y Sobel mediante UART.
+- Aplicación completa del nuevo filtro entre frames.
+- Recuperación de la imagen RGB original al volver a `filter 0`.
 
 Todas las pruebas se han superado correctamente.
 
-El cambio coordinado de resolución está implementado, el software compila sin
-avisos y el bitstream cumple timing. Falta realizar la validación física con un
-monitor HDMI mediante esta secuencia mínima:
-
-1. Comprobar el arranque en el modo 0 y ejecutar `status`.
-2. Probar las transiciones `0 → 1 → 2 → 0` con `enable 1`.
-3. Repetir los cambios con `enable 0` y comprobar que el TPG permanece parado.
-4. Mostrar los ocho patrones en cada modo.
-5. Probar `resolution 3`, argumentos no numéricos y argumentos adicionales.
+El cambio coordinado de resolución está implementado y validado físicamente
+mediante HDMI en 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30. El software
+compila sin avisos, el bitstream cumple timing y los cambios se realizan
+durante la ejecución sin volver a programar la FPGA.
 
 ## Funcionalidades pendientes
 
 Esta versión todavía no incluye:
 
-- Validación física del cambio dinámico de resolución.
-- Procesado HLS.
-- Selector HLS/bypass.
 - Interfaz gráfica de control.
 - Periférico HDMI propio desarrollado específicamente para el TFM.
 

@@ -20,9 +20,11 @@
 # - rtl/tpg/src/tpg_axis_wrapper.v
 # - rtl/source_selector/src/source_selector_core.v
 # - rtl/source_selector/src/source_selector_axi_wrapper.v
+# - rtl/video_filter/src/video_filter_axi_control.v
 # - vivado/constraints/zybo_z7_10_video.xdc
 # - vivado/ip/hdmi_tx_1.0
 # - vivado/ip/OV7670Ip
+# - vivado/ip/video_filter_1.0
 #
 #*****************************************************************************************
 
@@ -154,6 +156,7 @@ set files [list \
  [file normalize "${origin_dir}/../../rtl/tpg/src/tpg_axis_wrapper.v"] \
  [file normalize "${origin_dir}/../../rtl/source_selector/src/source_selector_core.v"] \
  [file normalize "${origin_dir}/../../rtl/source_selector/src/source_selector_axi_wrapper.v"] \
+ [file normalize "${origin_dir}/../../rtl/video_filter/src/video_filter_axi_control.v"] \
 ]
 add_files -norecurse -fileset $obj $files
 
@@ -212,7 +215,7 @@ set obj [get_filesets utils_1]
 proc cr_bd_design_1 { parentCell } {
 # The design that will be created by this Tcl proc contains the following 
 # module references:
-# source_selector_axi_wrapper, tpg_axis_wrapper
+# source_selector_axi_wrapper, tpg_axis_wrapper, video_filter_axi_control
 
 
 
@@ -243,6 +246,7 @@ proc cr_bd_design_1 { parentCell } {
   xilinx.com:ip:v_axi4s_vid_out:4.0\
   xilinx.com:ip:v_tc:6.1\
   xilinx.com:ip:v_vid_in_axi4s:4.0\
+  user.org:hls:video_filter:1.0\
   xilinx.com:ip:xlconcat:2.1\
   xilinx.com:ip:xlslice:1.0\
   "
@@ -272,6 +276,7 @@ proc cr_bd_design_1 { parentCell } {
      set list_check_mods "\ 
   source_selector_axi_wrapper\
   tpg_axis_wrapper\
+  video_filter_axi_control\
   "
 
    set list_mods_missing ""
@@ -954,7 +959,7 @@ proc cr_bd_design_1 { parentCell } {
   # Create instance: ps7_0_axi_periph, and set properties
   set ps7_0_axi_periph [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 ps7_0_axi_periph ]
   set_property -dict [ list \
-   CONFIG.NUM_MI {7} \
+   CONFIG.NUM_MI {8} \
  ] $ps7_0_axi_periph
 
   # Create instance: rst_ps7_0_150M, and set properties
@@ -1034,6 +1039,27 @@ proc cr_bd_design_1 { parentCell } {
    CONFIG.C_HAS_ASYNC_CLK {1} \
  ] $v_vid_in_axi4s_0
 
+  # Create instance: video_filter_0
+  # This is the RTL accelerator exported by Vivado HLS.
+  set video_filter_0 [ create_bd_cell -type ip -vlnv user.org:hls:video_filter:1.0 video_filter_0 ]
+
+  # Create instance: video_filter_axi_con_0
+  # The RTL wrapper converts AXI4-Lite accesses into the discrete mode and
+  # status signals used by the HLS accelerator.
+  set block_name video_filter_axi_control
+  set block_cell_name video_filter_axi_con_0
+  if { [catch {set video_filter_axi_con_0 [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
+     catch {common::send_msg_id "BD_TCL-105" "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   } elseif { $video_filter_axi_con_0 eq "" } {
+     catch {common::send_msg_id "BD_TCL-106" "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   }
+
+  set_property -dict [ list \
+   CONFIG.POLARITY {ACTIVE_HIGH} \
+ ] [get_bd_pins /video_filter_axi_con_0/rst]
+
   # Create instance: xlconcat_0, and set properties
   set xlconcat_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_0 ]
   set_property -dict [ list \
@@ -1086,10 +1112,12 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_intf_net -intf_net ps7_0_axi_periph_M04_AXI [get_bd_intf_pins clk_wiz_0/s_axi_lite] [get_bd_intf_pins ps7_0_axi_periph/M04_AXI]
   connect_bd_intf_net -intf_net ps7_0_axi_periph_M05_AXI [get_bd_intf_pins ps7_0_axi_periph/M05_AXI] [get_bd_intf_pins v_tc_0/ctrl]
   connect_bd_intf_net -intf_net ps7_0_axi_periph_M06_AXI [get_bd_intf_pins ps7_0_axi_periph/M06_AXI] [get_bd_intf_pins source_selector_0/s_axi]
+  connect_bd_intf_net -intf_net ps7_0_axi_periph_M07_AXI [get_bd_intf_pins ps7_0_axi_periph/M07_AXI] [get_bd_intf_pins video_filter_axi_con_0/s_axi]
   connect_bd_intf_net -intf_net source_selector_0_m_axis_video [get_bd_intf_pins axi_vdma_0/S_AXIS_S2MM] [get_bd_intf_pins source_selector_0/m_axis_video]
   connect_bd_intf_net -intf_net tpg_axis_wrapper_0_m_axis_video [get_bd_intf_pins source_selector_0/s_axis_tpg] [get_bd_intf_pins tpg_axis_wrapper_0/m_axis_video]
   connect_bd_intf_net -intf_net v_tc_0_vtiming_out [get_bd_intf_pins v_axi4s_vid_out_0/vtiming_in] [get_bd_intf_pins v_tc_0/vtiming_out]
-  connect_bd_intf_net -intf_net v_vid_in_axi4s_0_video_out [get_bd_intf_pins source_selector_0/s_axis_camera] [get_bd_intf_pins v_vid_in_axi4s_0/video_out]
+  connect_bd_intf_net -intf_net v_vid_in_axi4s_0_video_out [get_bd_intf_pins v_vid_in_axi4s_0/video_out] [get_bd_intf_pins video_filter_0/s_axis_video]
+  connect_bd_intf_net -intf_net video_filter_0_m_axis_video [get_bd_intf_pins source_selector_0/s_axis_camera] [get_bd_intf_pins video_filter_0/m_axis_video]
 
   # Create port connections
   connect_bd_net -net GND_dout [get_bd_pins GND/dout] [get_bd_pins rst_video_pixel/mb_debug_sys_rst] [get_bd_pins v_tc_0/fsync_in] [get_bd_pins v_vid_in_axi4s_0/vid_field_id] [get_bd_pins v_vid_in_axi4s_0/vid_hblank] [get_bd_pins v_vid_in_axi4s_0/vid_vblank]
@@ -1119,12 +1147,12 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net ov7670_video_in_0_video_data [get_bd_pins ov7670_video_in_0/video_data] [get_bd_pins v_vid_in_axi4s_0/vid_data]
   connect_bd_net -net ov7670_video_in_0_video_hsync [get_bd_pins ov7670_video_in_0/video_hsync] [get_bd_pins v_vid_in_axi4s_0/vid_hsync]
   connect_bd_net -net ov7670_video_in_0_video_vsync [get_bd_pins ov7670_video_in_0/video_vsync] [get_bd_pins v_vid_in_axi4s_0/vid_vsync]
-  connect_bd_net -net processing_system7_0_FCLK_CLK0 [get_bd_pins RESETCAM/s_axi_aclk] [get_bd_pins RESETCAMBUTTON/s_axi_aclk] [get_bd_pins axi_smc/aclk] [get_bd_pins axi_vdma_0/m_axi_mm2s_aclk] [get_bd_pins axi_vdma_0/m_axi_s2mm_aclk] [get_bd_pins axi_vdma_0/m_axis_mm2s_aclk] [get_bd_pins axi_vdma_0/s_axi_lite_aclk] [get_bd_pins axi_vdma_0/s_axis_s2mm_aclk] [get_bd_pins clk_wiz_0/s_axi_aclk] [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins processing_system7_0/M_AXI_GP0_ACLK] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins ps7_0_axi_periph/ACLK] [get_bd_pins ps7_0_axi_periph/M00_ACLK] [get_bd_pins ps7_0_axi_periph/M01_ACLK] [get_bd_pins ps7_0_axi_periph/M02_ACLK] [get_bd_pins ps7_0_axi_periph/M03_ACLK] [get_bd_pins ps7_0_axi_periph/M04_ACLK] [get_bd_pins ps7_0_axi_periph/M05_ACLK] [get_bd_pins ps7_0_axi_periph/M06_ACLK] [get_bd_pins ps7_0_axi_periph/S00_ACLK] [get_bd_pins rst_ps7_0_150M/slowest_sync_clk] [get_bd_pins source_selector_0/clk] [get_bd_pins tpg_axis_wrapper_0/clk] [get_bd_pins v_axi4s_vid_out_0/aclk] [get_bd_pins v_tc_0/s_axi_aclk] [get_bd_pins v_vid_in_axi4s_0/aclk]
+  connect_bd_net -net processing_system7_0_FCLK_CLK0 [get_bd_pins RESETCAM/s_axi_aclk] [get_bd_pins RESETCAMBUTTON/s_axi_aclk] [get_bd_pins axi_smc/aclk] [get_bd_pins axi_vdma_0/m_axi_mm2s_aclk] [get_bd_pins axi_vdma_0/m_axi_s2mm_aclk] [get_bd_pins axi_vdma_0/m_axis_mm2s_aclk] [get_bd_pins axi_vdma_0/s_axi_lite_aclk] [get_bd_pins axi_vdma_0/s_axis_s2mm_aclk] [get_bd_pins clk_wiz_0/s_axi_aclk] [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins processing_system7_0/M_AXI_GP0_ACLK] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins ps7_0_axi_periph/ACLK] [get_bd_pins ps7_0_axi_periph/M00_ACLK] [get_bd_pins ps7_0_axi_periph/M01_ACLK] [get_bd_pins ps7_0_axi_periph/M02_ACLK] [get_bd_pins ps7_0_axi_periph/M03_ACLK] [get_bd_pins ps7_0_axi_periph/M04_ACLK] [get_bd_pins ps7_0_axi_periph/M05_ACLK] [get_bd_pins ps7_0_axi_periph/M06_ACLK] [get_bd_pins ps7_0_axi_periph/M07_ACLK] [get_bd_pins ps7_0_axi_periph/S00_ACLK] [get_bd_pins rst_ps7_0_150M/slowest_sync_clk] [get_bd_pins source_selector_0/clk] [get_bd_pins tpg_axis_wrapper_0/clk] [get_bd_pins v_axi4s_vid_out_0/aclk] [get_bd_pins v_tc_0/s_axi_aclk] [get_bd_pins v_vid_in_axi4s_0/aclk] [get_bd_pins video_filter_0/ap_clk] [get_bd_pins video_filter_axi_con_0/clk]
   connect_bd_net -net processing_system7_0_FCLK_CLK1 [get_bd_ports xclk] [get_bd_pins processing_system7_0/FCLK_CLK1]
   connect_bd_net -net processing_system7_0_FCLK_RESET0_N [get_bd_pins processing_system7_0/FCLK_RESET0_N] [get_bd_pins rst_ps7_0_150M/ext_reset_in]
   connect_bd_net -net reset_0_1 [get_bd_ports RST_I] [get_bd_pins clk_wiz_1/reset] [get_bd_pins hdmi_tx_0/RST_I] [get_bd_pins util_vector_logic_0/Op1] [get_bd_pins v_vid_in_axi4s_0/vid_io_in_reset]
-  connect_bd_net -net rst_ps7_0_150M_peripheral_aresetn [get_bd_pins RESETCAM/s_axi_aresetn] [get_bd_pins RESETCAMBUTTON/s_axi_aresetn] [get_bd_pins axi_smc/aresetn] [get_bd_pins axi_vdma_0/axi_resetn] [get_bd_pins clk_wiz_0/s_axi_aresetn] [get_bd_pins ps7_0_axi_periph/ARESETN] [get_bd_pins ps7_0_axi_periph/M00_ARESETN] [get_bd_pins ps7_0_axi_periph/M01_ARESETN] [get_bd_pins ps7_0_axi_periph/M02_ARESETN] [get_bd_pins ps7_0_axi_periph/M03_ARESETN] [get_bd_pins ps7_0_axi_periph/M04_ARESETN] [get_bd_pins ps7_0_axi_periph/M05_ARESETN] [get_bd_pins ps7_0_axi_periph/M06_ARESETN] [get_bd_pins ps7_0_axi_periph/S00_ARESETN] [get_bd_pins rst_ps7_0_150M/peripheral_aresetn] [get_bd_pins rst_video_pixel/ext_reset_in] [get_bd_pins v_axi4s_vid_out_0/aresetn] [get_bd_pins v_tc_0/s_axi_aresetn] [get_bd_pins v_vid_in_axi4s_0/aresetn]
-  connect_bd_net -net rst_ps7_0_150M_peripheral_reset [get_bd_pins rst_ps7_0_150M/peripheral_reset] [get_bd_pins source_selector_0/rst] [get_bd_pins tpg_axis_wrapper_0/rst]
+  connect_bd_net -net rst_ps7_0_150M_peripheral_aresetn [get_bd_pins RESETCAM/s_axi_aresetn] [get_bd_pins RESETCAMBUTTON/s_axi_aresetn] [get_bd_pins axi_smc/aresetn] [get_bd_pins axi_vdma_0/axi_resetn] [get_bd_pins clk_wiz_0/s_axi_aresetn] [get_bd_pins ps7_0_axi_periph/ARESETN] [get_bd_pins ps7_0_axi_periph/M00_ARESETN] [get_bd_pins ps7_0_axi_periph/M01_ARESETN] [get_bd_pins ps7_0_axi_periph/M02_ARESETN] [get_bd_pins ps7_0_axi_periph/M03_ARESETN] [get_bd_pins ps7_0_axi_periph/M04_ARESETN] [get_bd_pins ps7_0_axi_periph/M05_ARESETN] [get_bd_pins ps7_0_axi_periph/M06_ARESETN] [get_bd_pins ps7_0_axi_periph/M07_ARESETN] [get_bd_pins ps7_0_axi_periph/S00_ARESETN] [get_bd_pins rst_ps7_0_150M/peripheral_aresetn] [get_bd_pins rst_video_pixel/ext_reset_in] [get_bd_pins v_axi4s_vid_out_0/aresetn] [get_bd_pins v_tc_0/s_axi_aresetn] [get_bd_pins v_vid_in_axi4s_0/aresetn] [get_bd_pins video_filter_0/ap_rst_n]
+  connect_bd_net -net rst_ps7_0_150M_peripheral_reset [get_bd_pins rst_ps7_0_150M/peripheral_reset] [get_bd_pins source_selector_0/rst] [get_bd_pins tpg_axis_wrapper_0/rst] [get_bd_pins video_filter_axi_con_0/rst]
   connect_bd_net -net rst_video_pixel_peripheral_aresetn [get_bd_pins rst_video_pixel/peripheral_aresetn] [get_bd_pins v_tc_0/resetn]
   connect_bd_net -net rst_video_pixel_peripheral_reset [get_bd_pins rst_video_pixel/peripheral_reset] [get_bd_pins v_axi4s_vid_out_0/vid_io_out_reset]
   connect_bd_net -net util_vector_logic_0_Res [get_bd_pins rst_video_pixel/aux_reset_in] [get_bd_pins util_vector_logic_0/Res]
@@ -1137,6 +1165,9 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net v_axi4s_vid_out_0_vid_vsync [get_bd_pins hdmi_tx_0/VGA_VS] [get_bd_pins v_axi4s_vid_out_0/vid_vsync]
   connect_bd_net -net v_axi4s_vid_out_0_vtg_ce [get_bd_pins v_axi4s_vid_out_0/vtg_ce] [get_bd_pins xlconcat_0/In2]
   connect_bd_net -net v_tc_0_fsync_out [get_bd_pins tpg_axis_wrapper_0/frame_sync_async] [get_bd_pins v_tc_0/fsync_out]
+  connect_bd_net -net video_filter_0_active_mode_status_V [get_bd_pins video_filter_0/active_mode_status_V] [get_bd_pins video_filter_axi_con_0/active_mode]
+  connect_bd_net -net video_filter_0_pending_status_V [get_bd_pins video_filter_0/pending_status_V] [get_bd_pins video_filter_axi_con_0/pending]
+  connect_bd_net -net video_filter_axi_con_0_requested_mode [get_bd_pins video_filter_0/requested_mode_V] [get_bd_pins video_filter_axi_con_0/requested_mode]
   connect_bd_net -net vsync_0_1 [get_bd_ports vsync] [get_bd_pins ov7670_video_in_0/vsync]
   connect_bd_net -net xlconcat_0_dout [get_bd_ports LED_O] [get_bd_pins xlconcat_0/dout]
   connect_bd_net -net xlconcat_1_dout [get_bd_pins processing_system7_0/IRQ_F2P] [get_bd_pins xlconcat_1/dout]
@@ -1154,6 +1185,7 @@ proc cr_bd_design_1 { parentCell } {
   create_bd_addr_seg -range 0x00010000 -offset 0x43C20000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs source_selector_0/s_axi/reg0] SEG_source_selector_0_reg0
   create_bd_addr_seg -range 0x00010000 -offset 0x41220000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs tpg_axis_wrapper_0/s_axi/reg0] SEG_tpg_axis_wrapper_0_reg0
   create_bd_addr_seg -range 0x00010000 -offset 0x43C10000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs v_tc_0/ctrl/Reg] SEG_v_tc_0_Reg
+  create_bd_addr_seg -range 0x00010000 -offset 0x43C30000 [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs video_filter_axi_con_0/s_axi/reg0] SEG_video_filter_axi_con_0_reg0
 
   # Perform GUI Layout
   regenerate_bd_layout -layout_string {
