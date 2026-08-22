@@ -32,9 +32,8 @@ OV7670 -> Video In to AXI4S -> Filtro HLS/
   -> HDMI
 ```
 
-La cadena y la conmutación entre el TPG y la cámara están validadas físicamente
-a 640 × 480. El software también incluye tres perfiles de resolución
-seleccionables, cuya validación física completa queda pendiente:
+La cadena, la conmutación entre el TPG y la cámara y los tres perfiles de
+resolución seleccionables están validados físicamente mediante HDMI:
 
 - Modo 0: 640 × 480p60, reloj de píxel nominal de 25 MHz.
 - Modo 1: 1280 × 720p60, reloj de píxel nominal de 74,25 MHz.
@@ -477,21 +476,15 @@ La aplicación y la interfaz AXI4-Lite se han validado físicamente comprobando:
 
 Todas las pruebas se han superado correctamente.
 
-El cambio coordinado de resolución está implementado, el software compila sin
-avisos y el bitstream cumple timing. Falta realizar la validación física con un
-monitor HDMI mediante esta secuencia mínima:
-
-1. Comprobar el arranque en el modo 0 y ejecutar `status`.
-2. Probar las transiciones `0 → 1 → 2 → 0` con `enable 1`.
-3. Repetir los cambios con `enable 0` y comprobar que el TPG permanece parado.
-4. Mostrar los ocho patrones en cada modo.
-5. Probar `resolution 3`, argumentos no numéricos y argumentos adicionales.
+El cambio coordinado de resolución está implementado y validado físicamente
+mediante HDMI en 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30. El software
+compila sin avisos, el bitstream cumple timing y los cambios se realizan
+durante la ejecución sin volver a programar la FPGA.
 
 ## Funcionalidades pendientes
 
 Esta versión todavía no incluye:
 
-- Validación física del cambio dinámico de resolución.
 - Interfaz gráfica de control.
 - Periférico HDMI propio desarrollado específicamente para el TFM.
 

@@ -9,10 +9,9 @@ configurable con salida HDMI.
 
 ## Estado actual
 
-La plataforma está validada físicamente con generación de patrones y entrada
-de cámara a 640 × 480. También está implementado el cambio coordinado de
-resolución, pendiente todavía de una validación física completa en los tres
-perfiles. El estado actual incluye:
+La plataforma está validada físicamente con generación de patrones, entrada
+de cámara a 640 × 480 y cambio coordinado entre los tres perfiles de
+resolución. El estado actual incluye:
 
 - Perfiles de 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
 - Formato RGB888 de 24 bits por píxel.
@@ -36,10 +35,9 @@ perfiles. El estado actual incluye:
 
 El TPG, el selector de fuente, el procesador HLS, el control AXI4-Lite/UART y
 la cadena integrada se han comprobado mediante testbenches y pruebas sobre la
-Zybo Z7-10. La conmutación TPG/cámara y los tres modos del filtro HLS se han
-validado físicamente mediante HDMI. El cambio de resolución compila, el
-bitstream cumple timing y queda pendiente de una prueba física completa de
-todos los perfiles.
+Zybo Z7-10. La conmutación TPG/cámara, los tres modos del filtro HLS y los
+perfiles 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30 se han validado
+físicamente mediante HDMI. El bitstream integrado cumple timing.
 
 ## Plataforma utilizada
 
@@ -250,14 +248,10 @@ También se han realizado pruebas físicas sobre la placa para verificar:
 
 Todas estas pruebas se han superado correctamente.
 
-La reconfiguración de resolución está implementada y compila sin avisos, pero
-su validación física queda pendiente. Antes de integrar la rama deben probarse:
-
-- Las transiciones `0 → 1 → 2 → 0`.
-- Los cambios con `enable=1` y con `enable=0`.
-- La lectura del modo activo mediante `status`.
-- Los ocho patrones en cada resolución.
-- El rechazo de índices y argumentos incorrectos.
+La reconfiguración de resolución también se ha validado físicamente mediante
+HDMI en los modos 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30. Se comprobó
+el cambio durante la ejecución y el retorno al modo inicial sin volver a
+programar la FPGA.
 
 ## Estructura del repositorio
 
@@ -341,8 +335,8 @@ feature/*  desarrollo aislado de cada funcionalidad
 
 El desarrollo previsto continúa con:
 
-1. Validación física completa del cambio coordinado de resolución.
-2. Pruebas integrales y comparación de recursos.
+1. Comparación de recursos con el TPG de AMD.
+2. Pruebas integrales adicionales.
 3. Redacción y revisión de la documentación final.
 
 Como ampliaciones opcionales se consideran:
