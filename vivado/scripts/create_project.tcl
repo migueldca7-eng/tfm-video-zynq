@@ -21,8 +21,10 @@
 # - rtl/source_selector/src/source_selector_core.v
 # - rtl/source_selector/src/source_selector_axi_wrapper.v
 # - rtl/video_filter/src/video_filter_axi_control.v
+# - rtl/hdmi_tx/src/tmds_encoder.v
+# - rtl/hdmi_tx/src/tmds_serializer.v
+# - rtl/hdmi_tx/src/hdmi_tx_rtl.v
 # - vivado/constraints/zybo_z7_10_video.xdc
-# - vivado/ip/hdmi_tx_1.0
 # - vivado/ip/OV7670Ip
 # - vivado/ip/video_filter_1.0
 #
@@ -157,6 +159,9 @@ set files [list \
  [file normalize "${origin_dir}/../../rtl/source_selector/src/source_selector_core.v"] \
  [file normalize "${origin_dir}/../../rtl/source_selector/src/source_selector_axi_wrapper.v"] \
  [file normalize "${origin_dir}/../../rtl/video_filter/src/video_filter_axi_control.v"] \
+ [file normalize "${origin_dir}/../../rtl/hdmi_tx/src/tmds_encoder.v"] \
+ [file normalize "${origin_dir}/../../rtl/hdmi_tx/src/tmds_serializer.v"] \
+ [file normalize "${origin_dir}/../../rtl/hdmi_tx/src/hdmi_tx_rtl.v"] \
 ]
 add_files -norecurse -fileset $obj $files
 
@@ -215,7 +220,7 @@ set obj [get_filesets utils_1]
 proc cr_bd_design_1 { parentCell } {
 # The design that will be created by this Tcl proc contains the following 
 # module references:
-# source_selector_axi_wrapper, tpg_axis_wrapper, video_filter_axi_control
+# hdmi_tx_rtl, source_selector_axi_wrapper, tpg_axis_wrapper, video_filter_axi_control
 
 
 
@@ -238,7 +243,6 @@ proc cr_bd_design_1 { parentCell } {
   xilinx.com:ip:smartconnect:1.0\
   xilinx.com:ip:axi_vdma:6.3\
   xilinx.com:ip:clk_wiz:6.0\
-  digilentinc.com:digilent:hdmi_tx:1.0\
   xilinx.com:user:ov7670_video_in:1.0\
   xilinx.com:ip:processing_system7:5.5\
   xilinx.com:ip:proc_sys_reset:5.0\
@@ -248,7 +252,6 @@ proc cr_bd_design_1 { parentCell } {
   xilinx.com:ip:v_vid_in_axi4s:4.0\
   user.org:hls:video_filter:1.0\
   xilinx.com:ip:xlconcat:2.1\
-  xilinx.com:ip:xlslice:1.0\
   "
 
    set list_ips_missing ""
@@ -274,6 +277,7 @@ proc cr_bd_design_1 { parentCell } {
   set bCheckModules 1
   if { $bCheckModules == 1 } {
      set list_check_mods "\ 
+  hdmi_tx_rtl\
   source_selector_axi_wrapper\
   tpg_axis_wrapper\
   video_filter_axi_control\
@@ -455,13 +459,16 @@ proc cr_bd_design_1 { parentCell } {
    CONFIG.PRIM_IN_FREQ {24.000} \
  ] $clk_wiz_1
 
-  # Create instance: hdmi_tx_0, and set properties
-  set hdmi_tx_0 [ create_bd_cell -type ip -vlnv digilentinc.com:digilent:hdmi_tx:1.0 hdmi_tx_0 ]
-  set_property -dict [ list \
-   CONFIG.C_BLUE_WIDTH {5} \
-   CONFIG.C_GREEN_WIDTH {6} \
-   CONFIG.C_RED_WIDTH {5} \
- ] $hdmi_tx_0
+  # Create instance: hdmi_tx_rtl_0, and set properties
+  set block_name hdmi_tx_rtl
+  set block_cell_name hdmi_tx_rtl_0
+  if { [catch {set hdmi_tx_rtl_0 [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
+     catch {common::send_msg_id "BD_TCL-105" "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   } elseif { $hdmi_tx_rtl_0 eq "" } {
+     catch {common::send_msg_id "BD_TCL-106" "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   }
 
   # Create instance: ov7670_video_in_0, and set properties
   set ov7670_video_in_0 [ create_bd_cell -type ip -vlnv xilinx.com:user:ov7670_video_in:1.0 ov7670_video_in_0 ]
@@ -1069,33 +1076,6 @@ proc cr_bd_design_1 { parentCell } {
   # Create instance: xlconcat_1, and set properties
   set xlconcat_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_1 ]
 
-  # Create instance: xlslice_0, and set properties
-  set xlslice_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_0 ]
-  set_property -dict [ list \
-   CONFIG.DIN_FROM {15} \
-   CONFIG.DIN_TO {10} \
-   CONFIG.DIN_WIDTH {24} \
-   CONFIG.DOUT_WIDTH {6} \
- ] $xlslice_0
-
-  # Create instance: xlslice_1, and set properties
-  set xlslice_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_1 ]
-  set_property -dict [ list \
-   CONFIG.DIN_FROM {7} \
-   CONFIG.DIN_TO {3} \
-   CONFIG.DIN_WIDTH {24} \
-   CONFIG.DOUT_WIDTH {5} \
- ] $xlslice_1
-
-  # Create instance: xlslice_2, and set properties
-  set xlslice_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_2 ]
-  set_property -dict [ list \
-   CONFIG.DIN_FROM {23} \
-   CONFIG.DIN_TO {19} \
-   CONFIG.DIN_WIDTH {24} \
-   CONFIG.DOUT_WIDTH {5} \
- ] $xlslice_2
-
   # Create interface connections
   connect_bd_intf_net -intf_net axi_smc_M00_AXI [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins processing_system7_0/S_AXI_HP0]
   connect_bd_intf_net -intf_net axi_vdma_0_M_AXIS_MM2S [get_bd_intf_pins axi_vdma_0/M_AXIS_MM2S] [get_bd_intf_pins v_axi4s_vid_out_0/video_in]
@@ -1127,21 +1107,21 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net axi_vdma_0_s2mm_introut [get_bd_pins axi_vdma_0/s2mm_introut] [get_bd_pins xlconcat_1/In1]
   connect_bd_net -net clk_in1_0_1 [get_bd_ports CLK_I] [get_bd_pins clk_wiz_0/clk_in1]
   connect_bd_net -net clk_in1_0_2 [get_bd_ports pclk] [get_bd_pins clk_wiz_1/clk_in1]
-  connect_bd_net -net clk_wiz_0_clk_25 [get_bd_pins clk_wiz_0/clk_25] [get_bd_pins hdmi_tx_0/PXLCLK_I] [get_bd_pins rst_video_pixel/slowest_sync_clk] [get_bd_pins v_axi4s_vid_out_0/vid_io_out_clk] [get_bd_pins v_tc_0/clk]
-  connect_bd_net -net clk_wiz_0_clk_125 [get_bd_pins clk_wiz_0/clk_125] [get_bd_pins hdmi_tx_0/PXLCLK_5X_I]
-  connect_bd_net -net clk_wiz_0_locked [get_bd_pins clk_wiz_0/locked] [get_bd_pins hdmi_tx_0/LOCKED_I] [get_bd_pins rst_video_pixel/dcm_locked]
+  connect_bd_net -net clk_wiz_0_clk_25 [get_bd_pins clk_wiz_0/clk_25] [get_bd_pins hdmi_tx_rtl_0/pixel_clk] [get_bd_pins rst_video_pixel/slowest_sync_clk] [get_bd_pins v_axi4s_vid_out_0/vid_io_out_clk] [get_bd_pins v_tc_0/clk]
+  connect_bd_net -net clk_wiz_0_clk_125 [get_bd_pins clk_wiz_0/clk_125] [get_bd_pins hdmi_tx_rtl_0/serial_clk_5x]
+  connect_bd_net -net clk_wiz_0_locked [get_bd_pins clk_wiz_0/locked] [get_bd_pins hdmi_tx_rtl_0/locked] [get_bd_pins rst_video_pixel/dcm_locked]
   connect_bd_net -net clk_wiz_1_clk_12 [get_bd_pins clk_wiz_1/clk_12] [get_bd_pins v_vid_in_axi4s_0/vid_io_in_clk]
   connect_bd_net -net clk_wiz_1_clk_24 [get_bd_pins clk_wiz_1/clk_24] [get_bd_pins ov7670_video_in_0/pclk]
   connect_bd_net -net datain_0_1 [get_bd_ports datain] [get_bd_pins ov7670_video_in_0/datain]
   connect_bd_net -net gpio_io_i_0_1 [get_bd_ports RESETCAMBUTTON] [get_bd_pins RESETCAMBUTTON/gpio_io_i]
-  connect_bd_net -net hdmi_tx_0_HDMI_CLK_N [get_bd_ports HDMI_CLK_N] [get_bd_pins hdmi_tx_0/HDMI_CLK_N]
-  connect_bd_net -net hdmi_tx_0_HDMI_CLK_P [get_bd_ports HDMI_CLK_P] [get_bd_pins hdmi_tx_0/HDMI_CLK_P]
-  connect_bd_net -net hdmi_tx_0_HDMI_D0_N [get_bd_ports HDMI_D0_N] [get_bd_pins hdmi_tx_0/HDMI_D0_N]
-  connect_bd_net -net hdmi_tx_0_HDMI_D0_P [get_bd_ports HDMI_D0_P] [get_bd_pins hdmi_tx_0/HDMI_D0_P]
-  connect_bd_net -net hdmi_tx_0_HDMI_D1_N [get_bd_ports HDMI_D1_N] [get_bd_pins hdmi_tx_0/HDMI_D1_N]
-  connect_bd_net -net hdmi_tx_0_HDMI_D1_P [get_bd_ports HDMI_D1_P] [get_bd_pins hdmi_tx_0/HDMI_D1_P]
-  connect_bd_net -net hdmi_tx_0_HDMI_D2_N [get_bd_ports HDMI_D2_N] [get_bd_pins hdmi_tx_0/HDMI_D2_N]
-  connect_bd_net -net hdmi_tx_0_HDMI_D2_P [get_bd_ports HDMI_D2_P] [get_bd_pins hdmi_tx_0/HDMI_D2_P]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_CLK_N [get_bd_ports HDMI_CLK_N] [get_bd_pins hdmi_tx_rtl_0/HDMI_CLK_N]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_CLK_P [get_bd_ports HDMI_CLK_P] [get_bd_pins hdmi_tx_rtl_0/HDMI_CLK_P]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D0_N [get_bd_ports HDMI_D0_N] [get_bd_pins hdmi_tx_rtl_0/HDMI_D0_N]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D0_P [get_bd_ports HDMI_D0_P] [get_bd_pins hdmi_tx_rtl_0/HDMI_D0_P]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D1_N [get_bd_ports HDMI_D1_N] [get_bd_pins hdmi_tx_rtl_0/HDMI_D1_N]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D1_P [get_bd_ports HDMI_D1_P] [get_bd_pins hdmi_tx_rtl_0/HDMI_D1_P]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D2_N [get_bd_ports HDMI_D2_N] [get_bd_pins hdmi_tx_rtl_0/HDMI_D2_N]
+  connect_bd_net -net hdmi_tx_rtl_0_HDMI_D2_P [get_bd_ports HDMI_D2_P] [get_bd_pins hdmi_tx_rtl_0/HDMI_D2_P]
   connect_bd_net -net href_0_1 [get_bd_ports href] [get_bd_pins ov7670_video_in_0/href]
   connect_bd_net -net ov7670_video_in_0_active_video [get_bd_pins ov7670_video_in_0/active_video] [get_bd_pins v_vid_in_axi4s_0/vid_active_video]
   connect_bd_net -net ov7670_video_in_0_video_data [get_bd_pins ov7670_video_in_0/video_data] [get_bd_pins v_vid_in_axi4s_0/vid_data]
@@ -1150,7 +1130,7 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net processing_system7_0_FCLK_CLK0 [get_bd_pins RESETCAM/s_axi_aclk] [get_bd_pins RESETCAMBUTTON/s_axi_aclk] [get_bd_pins axi_smc/aclk] [get_bd_pins axi_vdma_0/m_axi_mm2s_aclk] [get_bd_pins axi_vdma_0/m_axi_s2mm_aclk] [get_bd_pins axi_vdma_0/m_axis_mm2s_aclk] [get_bd_pins axi_vdma_0/s_axi_lite_aclk] [get_bd_pins axi_vdma_0/s_axis_s2mm_aclk] [get_bd_pins clk_wiz_0/s_axi_aclk] [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins processing_system7_0/M_AXI_GP0_ACLK] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins ps7_0_axi_periph/ACLK] [get_bd_pins ps7_0_axi_periph/M00_ACLK] [get_bd_pins ps7_0_axi_periph/M01_ACLK] [get_bd_pins ps7_0_axi_periph/M02_ACLK] [get_bd_pins ps7_0_axi_periph/M03_ACLK] [get_bd_pins ps7_0_axi_periph/M04_ACLK] [get_bd_pins ps7_0_axi_periph/M05_ACLK] [get_bd_pins ps7_0_axi_periph/M06_ACLK] [get_bd_pins ps7_0_axi_periph/M07_ACLK] [get_bd_pins ps7_0_axi_periph/S00_ACLK] [get_bd_pins rst_ps7_0_150M/slowest_sync_clk] [get_bd_pins source_selector_0/clk] [get_bd_pins tpg_axis_wrapper_0/clk] [get_bd_pins v_axi4s_vid_out_0/aclk] [get_bd_pins v_tc_0/s_axi_aclk] [get_bd_pins v_vid_in_axi4s_0/aclk] [get_bd_pins video_filter_0/ap_clk] [get_bd_pins video_filter_axi_con_0/clk]
   connect_bd_net -net processing_system7_0_FCLK_CLK1 [get_bd_ports xclk] [get_bd_pins processing_system7_0/FCLK_CLK1]
   connect_bd_net -net processing_system7_0_FCLK_RESET0_N [get_bd_pins processing_system7_0/FCLK_RESET0_N] [get_bd_pins rst_ps7_0_150M/ext_reset_in]
-  connect_bd_net -net reset_0_1 [get_bd_ports RST_I] [get_bd_pins clk_wiz_1/reset] [get_bd_pins hdmi_tx_0/RST_I] [get_bd_pins util_vector_logic_0/Op1] [get_bd_pins v_vid_in_axi4s_0/vid_io_in_reset]
+  connect_bd_net -net reset_0_1 [get_bd_ports RST_I] [get_bd_pins clk_wiz_1/reset] [get_bd_pins hdmi_tx_rtl_0/reset] [get_bd_pins util_vector_logic_0/Op1] [get_bd_pins v_vid_in_axi4s_0/vid_io_in_reset]
   connect_bd_net -net rst_ps7_0_150M_peripheral_aresetn [get_bd_pins RESETCAM/s_axi_aresetn] [get_bd_pins RESETCAMBUTTON/s_axi_aresetn] [get_bd_pins axi_smc/aresetn] [get_bd_pins axi_vdma_0/axi_resetn] [get_bd_pins clk_wiz_0/s_axi_aresetn] [get_bd_pins ps7_0_axi_periph/ARESETN] [get_bd_pins ps7_0_axi_periph/M00_ARESETN] [get_bd_pins ps7_0_axi_periph/M01_ARESETN] [get_bd_pins ps7_0_axi_periph/M02_ARESETN] [get_bd_pins ps7_0_axi_periph/M03_ARESETN] [get_bd_pins ps7_0_axi_periph/M04_ARESETN] [get_bd_pins ps7_0_axi_periph/M05_ARESETN] [get_bd_pins ps7_0_axi_periph/M06_ARESETN] [get_bd_pins ps7_0_axi_periph/M07_ARESETN] [get_bd_pins ps7_0_axi_periph/S00_ARESETN] [get_bd_pins rst_ps7_0_150M/peripheral_aresetn] [get_bd_pins rst_video_pixel/ext_reset_in] [get_bd_pins v_axi4s_vid_out_0/aresetn] [get_bd_pins v_tc_0/s_axi_aresetn] [get_bd_pins v_vid_in_axi4s_0/aresetn] [get_bd_pins video_filter_0/ap_rst_n]
   connect_bd_net -net rst_ps7_0_150M_peripheral_reset [get_bd_pins rst_ps7_0_150M/peripheral_reset] [get_bd_pins source_selector_0/rst] [get_bd_pins tpg_axis_wrapper_0/rst] [get_bd_pins video_filter_axi_con_0/rst]
   connect_bd_net -net rst_video_pixel_peripheral_aresetn [get_bd_pins rst_video_pixel/peripheral_aresetn] [get_bd_pins v_tc_0/resetn]
@@ -1159,10 +1139,10 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net v_axi4s_vid_out_0_locked [get_bd_pins v_axi4s_vid_out_0/locked] [get_bd_pins xlconcat_0/In1]
   connect_bd_net -net v_axi4s_vid_out_0_overflow [get_bd_pins v_axi4s_vid_out_0/overflow] [get_bd_pins xlconcat_0/In3]
   connect_bd_net -net v_axi4s_vid_out_0_underflow [get_bd_pins v_axi4s_vid_out_0/underflow] [get_bd_pins xlconcat_0/In0]
-  connect_bd_net -net v_axi4s_vid_out_0_vid_active_video [get_bd_pins hdmi_tx_0/VGA_DE] [get_bd_pins v_axi4s_vid_out_0/vid_active_video]
-  connect_bd_net -net v_axi4s_vid_out_0_vid_data [get_bd_pins v_axi4s_vid_out_0/vid_data] [get_bd_pins xlslice_0/Din] [get_bd_pins xlslice_1/Din] [get_bd_pins xlslice_2/Din]
-  connect_bd_net -net v_axi4s_vid_out_0_vid_hsync [get_bd_pins hdmi_tx_0/VGA_HS] [get_bd_pins v_axi4s_vid_out_0/vid_hsync]
-  connect_bd_net -net v_axi4s_vid_out_0_vid_vsync [get_bd_pins hdmi_tx_0/VGA_VS] [get_bd_pins v_axi4s_vid_out_0/vid_vsync]
+  connect_bd_net -net v_axi4s_vid_out_0_vid_active_video [get_bd_pins hdmi_tx_rtl_0/video_active] [get_bd_pins v_axi4s_vid_out_0/vid_active_video]
+  connect_bd_net -net v_axi4s_vid_out_0_vid_data1 [get_bd_pins hdmi_tx_rtl_0/video_data] [get_bd_pins v_axi4s_vid_out_0/vid_data]
+  connect_bd_net -net v_axi4s_vid_out_0_vid_hsync [get_bd_pins hdmi_tx_rtl_0/hsync] [get_bd_pins v_axi4s_vid_out_0/vid_hsync]
+  connect_bd_net -net v_axi4s_vid_out_0_vid_vsync [get_bd_pins hdmi_tx_rtl_0/vsync] [get_bd_pins v_axi4s_vid_out_0/vid_vsync]
   connect_bd_net -net v_axi4s_vid_out_0_vtg_ce [get_bd_pins v_axi4s_vid_out_0/vtg_ce] [get_bd_pins xlconcat_0/In2]
   connect_bd_net -net v_tc_0_fsync_out [get_bd_pins tpg_axis_wrapper_0/frame_sync_async] [get_bd_pins v_tc_0/fsync_out]
   connect_bd_net -net video_filter_0_active_mode_status_V [get_bd_pins video_filter_0/active_mode_status_V] [get_bd_pins video_filter_axi_con_0/active_mode]
@@ -1171,10 +1151,6 @@ proc cr_bd_design_1 { parentCell } {
   connect_bd_net -net vsync_0_1 [get_bd_ports vsync] [get_bd_pins ov7670_video_in_0/vsync]
   connect_bd_net -net xlconcat_0_dout [get_bd_ports LED_O] [get_bd_pins xlconcat_0/dout]
   connect_bd_net -net xlconcat_1_dout [get_bd_pins processing_system7_0/IRQ_F2P] [get_bd_pins xlconcat_1/dout]
-  connect_bd_net -net xlslice_0_Dout [get_bd_pins hdmi_tx_0/VGA_G] [get_bd_pins xlslice_0/Dout]
-  connect_bd_net -net xlslice_1_Dout [get_bd_pins hdmi_tx_0/VGA_B] [get_bd_pins xlslice_1/Dout]
-  connect_bd_net -net xlslice_2_Dout [get_bd_pins hdmi_tx_0/VGA_R] [get_bd_pins xlslice_2/Dout]
-
   # Create address segments
   create_bd_addr_seg -range 0x40000000 -offset 0x00000000 [get_bd_addr_spaces axi_vdma_0/Data_MM2S] [get_bd_addr_segs processing_system7_0/S_AXI_HP0/HP0_DDR_LOWOCM] SEG_processing_system7_0_HP0_DDR_LOWOCM
   create_bd_addr_seg -range 0x40000000 -offset 0x00000000 [get_bd_addr_spaces axi_vdma_0/Data_S2MM] [get_bd_addr_segs processing_system7_0/S_AXI_HP0/HP0_DDR_LOWOCM] SEG_processing_system7_0_HP0_DDR_LOWOCM
@@ -1216,11 +1192,8 @@ preplace portBus datain -pg 1 -lvl 0 -x -170 -y 1600 -defaultsOSRD
 preplace inst processing_system7_0 -pg 1 -lvl 8 -x 3120 -y 110 -defaultsOSRD
 preplace inst clk_wiz_0 -pg 1 -lvl 3 -x 980 -y 1400 -defaultsOSRD
 preplace inst util_vector_logic_0 -pg 1 -lvl 3 -x 980 -y 1530 -defaultsOSRD
-preplace inst hdmi_tx_0 -pg 1 -lvl 8 -x 3120 -y 1150 -defaultsOSRD
+preplace inst hdmi_tx_rtl_0 -pg 1 -lvl 8 -x 3120 -y 1150 -defaultsOSRD
 preplace inst v_axi4s_vid_out_0 -pg 1 -lvl 7 -x 2600 -y 580 -defaultsOSRD
-preplace inst xlslice_0 -pg 1 -lvl 7 -x 2600 -y 1240 -defaultsOSRD
-preplace inst xlslice_1 -pg 1 -lvl 7 -x 2600 -y 1340 -defaultsOSRD
-preplace inst xlslice_2 -pg 1 -lvl 7 -x 2600 -y 1140 -defaultsOSRD
 preplace inst v_tc_0 -pg 1 -lvl 6 -x 2190 -y 850 -defaultsOSRD
 preplace inst VCC -pg 1 -lvl 1 -x 180 -y 880 -defaultsOSRD
 preplace inst GND -pg 1 -lvl 4 -x 1400 -y 690 -defaultsOSRD
@@ -1240,24 +1213,21 @@ preplace inst v_vid_in_axi4s_0 -pg 1 -lvl 5 -x 1780 -y 1640 -defaultsOSRD
 preplace inst source_selector_0 -pg 1 -lvl 6 -x 2190 -y 1490 -defaultsOSRD
 preplace netloc clk_in1_0_1 1 0 3 NJ 1410 NJ 1410 750
 preplace netloc reset_0_1 1 0 8 NJ 1310 N 1310 760 1110 NJ 1110 1640J 1110 1960 1080 NJ 1080 2770
-preplace netloc hdmi_tx_0_HDMI_CLK_N 1 8 1 NJ 1100
-preplace netloc hdmi_tx_0_HDMI_CLK_P 1 8 1 NJ 1080
-preplace netloc hdmi_tx_0_HDMI_D2_N 1 8 1 NJ 1140
-preplace netloc hdmi_tx_0_HDMI_D2_P 1 8 1 NJ 1120
-preplace netloc hdmi_tx_0_HDMI_D0_P 1 8 1 NJ 1200
-preplace netloc hdmi_tx_0_HDMI_D1_N 1 8 1 NJ 1180
-preplace netloc hdmi_tx_0_HDMI_D1_P 1 8 1 NJ 1160
-preplace netloc hdmi_tx_0_HDMI_D0_N 1 8 1 NJ 1220
+preplace netloc hdmi_tx_rtl_0_HDMI_CLK_N 1 8 1 NJ 1100
+preplace netloc hdmi_tx_rtl_0_HDMI_CLK_P 1 8 1 NJ 1080
+preplace netloc hdmi_tx_rtl_0_HDMI_D2_N 1 8 1 NJ 1140
+preplace netloc hdmi_tx_rtl_0_HDMI_D2_P 1 8 1 NJ 1120
+preplace netloc hdmi_tx_rtl_0_HDMI_D0_P 1 8 1 NJ 1200
+preplace netloc hdmi_tx_rtl_0_HDMI_D1_N 1 8 1 NJ 1180
+preplace netloc hdmi_tx_rtl_0_HDMI_D1_P 1 8 1 NJ 1160
+preplace netloc hdmi_tx_rtl_0_HDMI_D0_N 1 8 1 NJ 1220
 preplace netloc clk_wiz_0_clk_25 1 2 6 810 1090 1170 150 N 150 1990 650 2450 770 2800J
 preplace netloc clk_wiz_0_clk_125 1 3 5 1180 1060 NJ 1060 N 1060 NJ 1060 2790J
 preplace netloc clk_wiz_0_locked 1 2 6 800 1100 1220 1070 NJ 1070 N 1070 NJ 1070 2780J
 preplace netloc v_axi4s_vid_out_0_vid_active_video 1 7 1 2820 500n
 preplace netloc v_axi4s_vid_out_0_vid_hsync 1 7 1 2830 540n
 preplace netloc v_axi4s_vid_out_0_vid_vsync 1 7 1 2810 560n
-preplace netloc v_axi4s_vid_out_0_vid_data 1 6 2 2440 910 2760
-preplace netloc xlslice_2_Dout 1 7 1 2750J 1140n
-preplace netloc xlslice_0_Dout 1 7 1 2810J 1220n
-preplace netloc xlslice_1_Dout 1 7 1 2870J 1240n
+preplace netloc v_axi4s_vid_out_0_vid_data1 1 7 1 2820 520n
 preplace netloc VCC_dout 1 1 6 260J 840 770 130 N 130 1580 660 2000 660 2420
 preplace netloc processing_system7_0_FCLK_CLK0 1 1 8 260 1390 740 1750 1190 1440 1600 1440 2010 210 2450 210 2890 -20 3360
 preplace netloc processing_system7_0_FCLK_RESET0_N 1 1 8 270 1050 N 1050 NJ 1050 NJ 1050 N 1050 NJ 1050 2760J 1300 3350
