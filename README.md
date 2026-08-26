@@ -1,350 +1,204 @@
 # TFM Video Zynq
 
 Plataforma SoC de vídeo reconfigurable desarrollada sobre una Zybo Z7-10 con
-Zynq-7000.
+Zynq-7000. El sistema combina lógica programable, software bare-metal y memoria
+DDR para generar o capturar vídeo, procesarlo, cambiar su formato y mostrarlo
+por HDMI con un único bitstream.
 
-El proyecto combina lógica programable en la PL, software bare-metal ejecutado
-en el PS y memoria DDR compartida para construir una cadena de vídeo
-configurable con salida HDMI.
+## Estado del proyecto
 
-## Estado actual
+La plataforma final está implementada y validada sobre la placa. Incluye:
 
-La plataforma está validada físicamente con generación de patrones, entrada
-de cámara a 640 × 480 y cambio coordinado entre los tres perfiles de
-resolución. El estado actual incluye:
+- TPG propio en Verilog con ocho patrones y salida AXI4-Stream Video.
+- Cámara OV7670 en RGB888 y resolución nativa de 640 × 480.
+- Selector AXI4-Stream entre TPG y cámara, con conmutación en frontera de frame.
+- Filtro HLS de cámara con bypass, escala de grises y Sobel.
+- AXI VDMA con triple buffering en DDR.
+- Tres perfiles de salida: 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
+- Escalador HLS de cámara: VGA en bypass y recorte central 16:9 con vecino más
+  próximo ×2/×3 para 720p y 1080p.
+- Transmisor HDMI/TMDS propio en RTL, con codificación, serialización 10:1 DDR y
+  salida diferencial.
+- Wrappers AXI4-Lite propios para TPG, selector, filtro y escalador.
+- Aplicación para Xilinx SDK 2019.1 con intérprete de comandos UART.
+- Configuración solicitada/activa y cambios seguros entre frames.
+- Script Tcl canónico para reconstruir el proyecto Vivado.
 
-- Perfiles de 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30.
-- Formato RGB888 de 24 bits por píxel.
-- Test Pattern Generator propio escrito en Verilog.
-- Ocho patrones de vídeo seleccionables.
-- Salida AXI4-Stream Video con `TUSER`, `TLAST`, `TVALID` y `TREADY`.
-- AXI VDMA con tres framebuffers almacenados en la DDR.
-- Salida HDMI hacia un monitor.
-- Interfaz AXI4-Lite para configurar el TPG desde el procesador.
-- Entrada de cámara OV7670 en formato RGB888 y resolución VGA.
-- Procesador de vídeo desarrollado con Vivado HLS.
-- Modos bypass, escala de grises y detección de bordes Sobel.
-- Interfaz AXI4-Lite para seleccionar y consultar el filtro activo.
-- Selector AXI4-Stream entre el TPG y la cámara.
-- Interfaz AXI4-Lite para solicitar y consultar la fuente de vídeo.
-- Aplicación bare-metal con consola de comandos por UART.
-- Actualización de la configuración entre frames completos.
-- Conmutación de fuente únicamente en límites de frame.
-- Reconfiguración coordinada del TPG, la VDMA, el VTC y el Clock Wizard.
-- Tres espacios de 6 MiB reservados en DDR para los framebuffers.
+Se han probado físicamente los patrones, la cámara, los tres filtros, la
+conmutación de fuente, el HDMI propio y las tres resoluciones tanto con TPG
+como con cámara. El diseño final genera bitstream y cumple timing.
 
-El TPG, el selector de fuente, el procesador HLS, el control AXI4-Lite/UART y
-la cadena integrada se han comprobado mediante testbenches y pruebas sobre la
-Zybo Z7-10. La conmutación TPG/cámara, los tres modos del filtro HLS y los
-perfiles 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30 se han validado
-físicamente mediante HDMI. El bitstream integrado cumple timing.
+## Plataforma
 
-## Plataforma utilizada
+- Placa: Digilent Zybo Z7-10.
+- Dispositivo: `xc7z010clg400-1`.
+- Herramientas: Vivado, Xilinx SDK y Vivado HLS 2019.1.
+- Formato de píxel: RGB888, un píxel por beat AXI4-Stream.
+- Control: AXI4-Lite desde el PS y consola UART a 115200 8N1.
 
-- Placa: Zybo Z7-10.
-- Dispositivo: XC7Z010-1CLG400C.
-- SoC: Zynq-7000.
-- Vivado: 2019.1.
-- Xilinx SDK: 2019.1.
-- RTL del TPG: Verilog.
-- Software: C bare-metal.
-- Interfaz de vídeo: AXI4-Stream Video.
-- Interfaz de control: AXI4-Lite.
-- Salida: HDMI.
-
-## Arquitectura actual
-
-La cadena de vídeo validada es:
+## Arquitectura final
 
 ```text
-TPG propio ------------------------------\
-                                          -> Selector AXI4-Stream Video
-Cámara OV7670 -> RGB -> Procesador HLS ---/
-  -> AXI VDMA S2MM
-  -> DDR
-  -> AXI VDMA MM2S
-  -> AXI4-Stream to Video Out
-  -> HDMI TX
-  -> Monitor
+TPG RTL --------------------------------------\
+                                               -> Selector AXI4-Stream -> VDMA S2MM
+OV7670 -> captura -> filtro HLS ---------------/                          |
+                                                                           v
+                                                                      DDR (3 frames)
+                                                                           |
+                                                                           v
+VDMA MM2S -> escalador HLS -> AXI4-Stream to Video Out -> HDMI/TMDS RTL -> monitor
+                               ^
+                               |
+                       VTC + reloj de píxel
+
+UART -> aplicación bare-metal -> AXI4-Lite -> TPG / selector / filtro / escalador
+                                    `-------> VDMA / VTC / Clock Wizard / cámara
 ```
 
-El Video Timing Controller genera la temporización de salida y proporciona una
-referencia de inicio de frame al TPG. De esta forma, el generador produce un
-nuevo frame cuando la cadena de salida está preparada para mostrarlo.
+El filtro está únicamente en la rama de cámara. El escalador se sitúa después
+de MM2S: la cámara siempre se captura y almacena como VGA y se adapta al tamaño
+de salida al leerla. Con TPG, el escalador permanece en bypass porque el TPG ya
+genera el perfil solicitado.
 
-El flujo de control es:
+## Funcionalidades configurables
 
-```text
-Terminal serie
-  -> Aplicación bare-metal en el PS
-  -> AXI4-Lite
-  -> Registros del TPG, del selector de fuente y del filtro HLS
-```
+### TPG
 
-El TPG respeta el backpressure AXI4-Stream y solo avanza al siguiente píxel
-cuando se produce el handshake entre `TVALID` y `TREADY`.
-
-## Patrones implementados
-
-| Identificador | Patrón |
+| ID | Patrón |
 |---:|---|
 | 0 | Negro |
 | 1 | Color sólido configurable |
 | 2 | Barras de color |
 | 3 | Rampa horizontal periódica |
 | 4 | Rampa vertical periódica |
-| 5 | Tablero de ajedrez de bloques de 32 × 32 píxeles |
-| 6 | Rejilla con separación de 32 píxeles |
-| 7 | Rampa temporal uniforme |
+| 5 | Damero de 32 × 32 píxeles |
+| 6 | Rejilla cada 32 píxeles |
+| 7 | Rampa temporal |
 
-El color sólido se configura en formato RGB888. La rampa temporal incrementa
-su nivel al completar cada frame mediante un paso configurable de 8 bits.
+### Filtro HLS
 
-## Configuración dinámica
+| ID | Modo |
+|---:|---|
+| 0 | Bypass RGB888 |
+| 1 | Escala de grises |
+| 2 | Detección de bordes Sobel 3 × 3 |
 
-Los siguientes parámetros pueden modificarse desde software:
+El Sobel usa dos buffers de línea y está dimensionado para la cámara VGA. Los
+bordes sin nueve vecinos se generan en negro.
 
-- Habilitación del TPG.
-- Patrón seleccionado.
-- Color sólido.
-- Paso de la rampa temporal.
-- Perfil de resolución.
+### Resolución y reescalado
 
-El patrón, el color y el paso temporal se guardan primero como configuración
-solicitada. Si hay un frame en curso, el wrapper espera a que termine antes de
-aplicar los nuevos valores.
+| ID | Salida | TPG | Cámara |
+|---:|---|---|---|
+| 0 | 640 × 480p60 | Generación nativa | VGA en bypass |
+| 1 | 1280 × 720p60 | Generación nativa | Crop 640 × 360 + nearest ×2 |
+| 2 | 1920 × 1080p30 | Generación nativa | Crop 640 × 360 + nearest ×3 |
 
-Al deshabilitar el TPG, el frame activo termina correctamente y no se inicia
-uno nuevo. La imagen permanece visible porque el último frame continúa
-almacenado en la DDR y la VDMA sigue enviándolo hacia la salida HDMI.
+El recorte elimina 60 líneas superiores y 60 inferiores para convertir 4:3 en
+16:9 sin deformar la imagen. Los modos se aplican al comienzo de un frame.
 
-La dirección base AXI4-Lite asignada actualmente al TPG es:
+### HDMI/TMDS propio
 
-```text
-0x41220000
-```
+El transmisor se divide en tres capas:
 
-La aplicación y el mapa de registros se documentan en
-[`sw/vitis/README.md`](sw/vitis/README.md).
+- `tmds_encoder.v`: convierte cada canal de 8 bits en símbolos TMDS de 10 bits
+  y mantiene la disparidad acumulada.
+- `tmds_serializer.v`: usa OSERDESE2 maestro/esclavo para serializar 10:1 en
+  DDR con un reloj cinco veces superior al reloj de píxel.
+- `hdmi_tx_rtl.v`: instancia tres canales de datos, el canal de reloj y OBUFDS
+  para los cuatro pares diferenciales.
 
-## Selector de fuente
+Durante blanking, HSync/VSync se codifican como palabras de control TMDS. No se
+implementan audio, InfoFrames, HDCP, EDID/DDC ni hot-plug.
 
-El selector propio dispone de dos entradas AXI4-Stream Video:
+## Mapas de control
 
-- Fuente 0: TPG.
-- Fuente 1: cámara OV7670.
+| Bloque | Dirección base |
+|---|---:|
+| TPG | `0x41220000` |
+| Selector de fuente | `0x43C20000` |
+| Filtro HLS | `0x43C30000` |
+| Escalador HLS | `0x43C40000` |
 
-La fuente se solicita desde software mediante el comando `source <0|1>`. El
-selector no conmuta en mitad de una imagen: termina el frame de la fuente
-activa y espera el `TUSER` que identifica el primer píxel de un frame completo
-de la fuente nueva. Los registros de estado permiten consultar la fuente
-activa y si existe una conmutación pendiente.
-
-La cámara se inicializa mediante I2C/SCCB desde el PS. Tras liberar su reset
-hardware, el software espera 10 ms antes de la primera transacción para que el
-sensor esté preparado. Cuando la cámara deja de utilizarse se activa su modo
-de reposo por software.
-
-## Procesado de vídeo HLS
-
-La rama de cámara incluye un acelerador desarrollado con Vivado HLS 2019.1.
-El TPG entra directamente en el selector de fuente, por lo que sus patrones no
-se procesan. La cadena de cámara es:
-
-```text
-OV7670 -> Video In to AXI4-Stream -> Filtro HLS -> Selector de fuente
-```
-
-El acelerador admite tres modos:
-
-| Identificador | Modo | Operación |
-|---:|---|---|
-| 0 | Bypass | Conserva el píxel RGB888 original |
-| 1 | Escala de grises | Calcula luminancia y replica el resultado en R, G y B |
-| 2 | Sobel | Detecta bordes sobre la intensidad en escala de grises |
-
-El modo se solicita mediante AXI4-Lite y se aplica al aceptar el `TUSER` del
-siguiente frame. De esta forma nunca se mezclan dos filtros dentro de una
-misma imagen. El core devuelve el modo activo y un indicador `pending`.
-
-El filtro Sobel utiliza dos buffers de línea y una ventana 3 × 3. Está
-dimensionado para la entrada VGA de la OV7670, 640 × 480, y genera en negro los
-bordes que no disponen de los nueve vecinos necesarios. Los metadatos
-AXI4-Stream permanecen alineados con los píxeles durante las fases de llenado,
-procesamiento y vaciado del pipeline.
-
-La dirección base del wrapper de control es `0x43C30000`. La implementación
-HLS alcanza un intervalo de iniciación de un ciclo y cumple el objetivo de 150
-MHz. El diseño y sus pruebas se describen en
-[`hls/video_proc/README.md`](hls/video_proc/README.md).
-
-## Cambio coordinado de resolución
-
-La aplicación ofrece tres perfiles cerrados:
-
-| Identificador | Modo | Reloj de píxel nominal |
-|---:|---|---:|
-| 0 | 640 × 480p60 | 25 MHz |
-| 1 | 1280 × 720p60 | 74,25 MHz |
-| 2 | 1920 × 1080p30 | 74,25 MHz |
-
-El comando `resolution <0..2>` detiene la cadena de forma ordenada y aplica el
-nuevo perfil. El TPG termina el frame activo, se paran ambos canales de la
-VDMA, se deshabilita el VTC, se reconfigura el Clock Wizard y se cargan las
-nuevas dimensiones y temporizaciones. La VDMA y el VTC se arrancan antes de
-restaurar el estado anterior de `enable`.
-
-Los valores del Clock Wizard están precalculados. El bitstream se implementa
-para el perfil de mayor frecuencia y el software selecciona el perfil necesario
-en tiempo de ejecución, sin regenerar el bitstream.
+Los mapas detallados y el flujo de la aplicación están documentados en
+[`sw/vitis/README.md`](sw/vitis/README.md). El nombre de esa carpeta se
+mantiene por compatibilidad histórica; la herramienta utilizada es Xilinx SDK
+2019.1.
 
 ## Verificación
 
-Se utilizan testbenches autocontenibles para RTL y HLS:
+Las fuentes incluyen testbenches RTL y C para:
 
-- `rtl/tpg/tb/tb_tpg_core.v`
-- `rtl/tpg/tb/tb_tpg_axis_wrapper.v`
-- `rtl/source_selector/tb/tb_source_selector_core.v`
-- `rtl/source_selector/tb/tb_source_selector_axi_wrapper.v`
-- `rtl/video_filter/tb/tb_video_filter_axi_control.v`
-- `hls/video_proc/tb/tb_video_filter.cpp`
-- `hls/video_proc/rtl_tb/tb_video_filter_rtl.sv`
+- TPG y wrapper AXI4-Lite.
+- Selector de fuente y cambio en SOF.
+- Filtro HLS y wrapper de control.
+- Codificador TMDS, serializador y top HDMI.
+- Escalador HLS, marcas `TUSER`/`TLAST`, bypass y factores ×2/×3.
+- Backpressure y estabilidad de los paquetes AXI4-Stream.
 
-Las simulaciones comprueban:
-
-- Los ocho patrones de vídeo.
-- Las coordenadas de los píxeles.
-- El inicio de frame mediante `TUSER`.
-- El final de línea mediante `TLAST`.
-- El comportamiento ante backpressure.
-- La sincronización de comienzo de frame.
-- La habilitación y detención del generador.
-- Las transacciones de lectura y escritura AXI4-Lite.
-- La aplicación segura de configuración entre frames.
-- Los registros de estado.
-- La conmutación TPG/cámara en límites de frame.
-- El descarte de fragmentos anteriores al siguiente `TUSER`.
-- Las transacciones AXI4-Lite y el estado del selector.
-- Los modos bypass, escala de grises y Sobel.
-- Los cambios de filtro únicamente al comienzo de un frame.
-- El llenado y vaciado de los buffers de Sobel.
-- La alineación de `TDATA`, `TUSER`, `TLAST`, `TKEEP` y `TSTRB`.
-- El backpressure a la salida del acelerador HLS.
-- La interfaz AXI4-Lite y los modos inválidos del filtro.
-
-También se han realizado pruebas físicas sobre la placa para verificar:
-
-- Todos los patrones.
-- Los componentes rojo, verde y azul del color sólido.
-- Diferentes pasos de la rampa temporal.
-- Cambios de configuración durante la ejecución.
-- Deshabilitación y reactivación del TPG.
-- Lectura de registros mediante el comando `status`.
-- Rechazo de comandos UART incorrectos.
-- Inicialización y control de reposo de la cámara OV7670.
-- Conmutación física TPG/cámara con salida HDMI correcta.
-- Selección dinámica de bypass, escala de grises y Sobel sobre la cámara.
-- Recuperación de la imagen original al regresar al modo bypass.
-
-Todas estas pruebas se han superado correctamente.
-
-La reconfiguración de resolución también se ha validado físicamente mediante
-HDMI en los modos 640 × 480p60, 1280 × 720p60 y 1920 × 1080p30. Se comprobó
-el cambio durante la ejecución y el retorno al modo inicial sin volver a
-programar la FPGA.
+Además se validó una reconstrucción limpia con
+`vivado/scripts/create_project.tcl`, el Block Design y el bitstream integrado.
+La salida 1080p30 fue aceptada por una televisión; un monitor de PC concreto no
+admitió ese modo, aunque sí mostró VGA y 720p.
 
 ## Estructura del repositorio
 
 ```text
 tfm-video-zynq/
-|-- README.md
-|-- AGENTS_tfm_video_zynq.md
-|-- docs/
-|   |-- architecture/
-|   |-- decisions/
-|   `-- planning/
-|-- rtl/
-|   |-- common/
-|   |-- source_selector/
-|   |   |-- src/
-|   |   `-- tb/
-|   `-- tpg/
-|       |-- src/
-|       `-- tb/
+|-- docs/decisions/           memoria técnica y decisiones
 |-- hls/
-|   `-- video_proc/
-|-- sw/
-|   `-- vitis/
-|       |-- src/
-|       `-- include/
+|   |-- video_proc/           filtro bypass/gris/Sobel
+|   `-- video_scaler/         recorte y escalado de cámara
+|-- rtl/
+|   |-- hdmi_tx/              transmisor HDMI/TMDS propio
+|   |-- source_selector/      selector de fuente
+|   |-- tpg/                  generador de patrones
+|   |-- video_filter/         wrapper AXI-Lite del filtro
+|   `-- video_scaler/         wrapper AXI-Lite del escalador
+|-- sw/vitis/                 fuentes para Xilinx SDK 2019.1
 |-- vivado/
 |   |-- constraints/
-|   |-- ip/
-|   |-- scripts/
-|   `-- bd/
-|-- tools/
-`-- work/
+|   |-- ip/                   IP HLS exportados
+|   `-- scripts/              Tcl de reconstrucción
+`-- work/                     artefactos generados, no versionados
 ```
 
-La carpeta `work/` contiene los proyectos y resultados generados por Vivado y
-SDK. No forma parte de las fuentes versionadas.
+## Reconstrucción
 
-## Reconstrucción del proyecto
-
-El proyecto Vivado puede reconstruirse mediante:
+El proyecto Vivado se reconstruye con:
 
 ```text
-vivado/scripts/create_project.tcl
+vivado -mode batch -source vivado/scripts/create_project.tcl
 ```
 
-Las instrucciones y requisitos se encuentran en:
+También puede ejecutarse desde la Tcl Console de Vivado:
+
+```tcl
+source vivado/scripts/create_project.tcl
+```
+
+Después se valida el Block Design, se generan los output products y el
+bitstream, y se exporta el hardware marcando `Include bitstream`. Las
+instrucciones completas son:
 
 - [`vivado/scripts/README.md`](vivado/scripts/README.md)
 - [`sw/vitis/README.md`](sw/vitis/README.md)
 
 ## Criterio de versionado
 
-Se versionan:
-
-- Código RTL.
-- Testbenches.
-- Código C de la aplicación.
-- Código HLS y el IP exportado necesario para reconstruir el diseño.
-- Constraints.
-- IP propio necesario para reconstruir el hardware.
-- Scripts Tcl.
-- Documentación técnica.
-
-No se versionan:
-
-- Proyectos generados completos de Vivado o SDK.
-- Directorios de síntesis, implementación y simulación.
-- Bitstreams y exportaciones hardware.
-- Ejecutables ELF.
-- Logs, journals, cachés y archivos temporales.
-
-El flujo de ramas utilizado es:
+Se versionan fuentes RTL/HLS/C, testbenches, constraints, IP exportados,
+scripts Tcl y documentación. No se versionan proyectos completos de Vivado o
+SDK, bitstreams, HDF, ELF, cachés, journals ni resultados de implementación.
 
 ```text
-main       versiones estables validadas
+main       hitos estables validados
 develop    integración de funcionalidades
-feature/*  desarrollo aislado de cada funcionalidad
+feature/*  desarrollo aislado
 ```
 
-## Próximas fases
+## Ampliaciones posibles
 
-El desarrollo previsto continúa con:
-
-1. Comparación de recursos con el TPG de AMD.
-2. Pruebas integrales adicionales.
-3. Redacción y revisión de la documentación final.
-
-Como ampliaciones opcionales se consideran:
-
-- Desarrollo de un periférico HDMI propio, preferiblemente de salida.
-- Interfaz gráfica en el PC comunicada por puerto serie.
-- Entrada HDMI adicional.
-
-El cambio de resolución no se considera únicamente una modificación del TPG:
-debe coordinarse con la VDMA, los framebuffers, el Video Timing Controller, el
-subsistema de salida y el software del PS.
+- Interpolación bilineal, letterbox o stretch en el escalador.
+- Interfaz gráfica de control por puerto serie.
+- Lectura EDID/DDC, audio o entrada HDMI.
+- Comparación de recursos con IP equivalentes de AMD.
