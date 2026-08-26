@@ -79,6 +79,21 @@
 #define VIDEO_FILTER_CONTROL_OFFSET 0x00U
 #define VIDEO_FILTER_MODE_MAX       2U
 
+/*
+ * Mapa de registros del escalador de camara. CONTROL contiene la
+ * configuracion solicitada por software y STATUS la configuracion que el
+ * core HLS ha aplicado realmente al comienzo de un frame.
+ */
+#define VIDEO_SCALER_BASEADDR       XPAR_VIDEO_SCALER_AXI_CON_0_BASEADDR
+#define VIDEO_SCALER_CONTROL_OFFSET 0x00U
+#define VIDEO_SCALER_STATUS_OFFSET  0x04U
+
+#define VIDEO_SCALER_ENABLE_MASK    0x00000001U
+#define VIDEO_SCALER_RES_SHIFT      1U
+#define VIDEO_SCALER_RES_MASK       0x00000006U
+#define VIDEO_SCALER_PENDING_MASK   0x00000040U
+#define VIDEO_SCALER_APPLY_TIMEOUT_MS 1000U
+
 /* Configuracion fija de la camara OV7670 utilizada en el proyecto base. */
 #define CAMERA_IIC_DEVICE_ID         XPAR_XIICPS_0_DEVICE_ID
 #define CAMERA_RESET_DEVICE_ID       XPAR_RESETCAM_DEVICE_ID
@@ -688,6 +703,84 @@ static void tpg_configure_size(const VideoMode *Mode)
 }
 
 /*
+ * Solicita al wrapper AXI-Lite una configuracion del escalador. El indice de
+ * VideoModes coincide con la codificacion hardware de requested_resolution:
+ * 0 para VGA, 1 para 720p y 2 para 1080p.
+ *
+ * VGA utiliza bypass. Para los modos superiores se activa el escalado; los
+ * campos aspect e interpolation permanecen a cero, que selecciona recorte
+ * central y vecino mas proximo en la implementacion actual.
+ */
+static int video_scaler_request(u32 ResolutionIndex)
+{
+    u32 ControlValue;
+
+    if (ResolutionIndex >= VIDEO_MODE_COUNT) {
+        return XST_FAILURE;
+    }
+
+    ControlValue = ResolutionIndex << VIDEO_SCALER_RES_SHIFT;
+
+    if (ResolutionIndex != 0U) {
+        ControlValue |= VIDEO_SCALER_ENABLE_MASK;
+    }
+
+    Xil_Out32(
+        VIDEO_SCALER_BASEADDR + VIDEO_SCALER_CONTROL_OFFSET,
+        ControlValue
+    );
+
+    return XST_SUCCESS;
+}
+
+/*
+ * Espera a que el core HLS confirme la configuracion solicitada. El cambio
+ * solo puede completarse cuando el escalador recibe el TUSER de un nuevo
+ * frame, por lo que esta funcion debe utilizarse con la VDMA ya arrancada.
+ */
+static int video_scaler_wait_active(u32 ResolutionIndex)
+{
+    XTime StartTime;
+    XTime CurrentTime;
+    XTime TimeoutCounts;
+    u32 StatusRegister;
+    u32 ActiveEnable;
+    u32 ActiveResolution;
+    u32 ExpectedEnable;
+
+    ExpectedEnable = (ResolutionIndex == 0U) ? 0U : 1U;
+
+    TimeoutCounts =
+        ((XTime)COUNTS_PER_SECOND * VIDEO_SCALER_APPLY_TIMEOUT_MS) / 1000U;
+    XTime_GetTime(&StartTime);
+
+    do {
+        StatusRegister = Xil_In32(
+            VIDEO_SCALER_BASEADDR + VIDEO_SCALER_STATUS_OFFSET
+        );
+
+        ActiveEnable = StatusRegister & VIDEO_SCALER_ENABLE_MASK;
+        ActiveResolution =
+            (StatusRegister & VIDEO_SCALER_RES_MASK) >>
+            VIDEO_SCALER_RES_SHIFT;
+
+        if (((StatusRegister & VIDEO_SCALER_PENDING_MASK) == 0U) &&
+            (ActiveEnable == ExpectedEnable) &&
+            (ActiveResolution == ResolutionIndex)) {
+            return XST_SUCCESS;
+        }
+
+        XTime_GetTime(&CurrentTime);
+    } while ((CurrentTime - StartTime) < TimeoutCounts);
+
+    xil_printf(
+        "ERROR: scaler timeout, status=0x%08x\r\n",
+        StatusRegister
+    );
+    return XST_FAILURE;
+}
+
+/*
  * Impide que el TPG comience un frame nuevo y espera a que termine el que
  * pudiera estar generando. La VDMA debe continuar funcionando durante esta
  * espera para que el AXI4-Stream pueda completar el frame actual.
@@ -823,6 +916,12 @@ static int video_apply_mode(const VideoMode *Mode)
      */
     tpg_configure_size(Mode);
 
+    /* El TPG ya genera la resolucion final; el escalador debe quedar bypass. */
+    Status = video_scaler_request(0U);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
     /*
      * Los consumidores se ponen en funcionamiento antes de permitir que el
      * TPG vuelva a generar datos.
@@ -844,9 +943,135 @@ static int video_apply_mode(const VideoMode *Mode)
         PreviousEnable
     );
 
+    /*
+     * Solo se espera la confirmacion si el TPG puede producir un nuevo frame.
+     * Con ENABLE=0 no llegaria ningun TUSER y la espera agotaria el timeout.
+     */
+    if (PreviousEnable != 0U) {
+        Status = video_scaler_wait_active(0U);
+        if (Status != XST_SUCCESS) {
+            return XST_FAILURE;
+        }
+    }
+
     CurrentVideoMode = Mode;
 
     xil_printf("Video mode active: %s\r\n", Mode->Name);
+    return XST_SUCCESS;
+}
+
+/*
+ * Cambia la resolucion de salida cuando la fuente activa es la camara.
+ *
+ * La OV7670 y los frames almacenados en DDR permanecen siempre en VGA. El
+ * reloj y el VTC describen, en cambio, la resolucion que recibe el monitor, y
+ * el escalador convierte entre ambos dominios de dimensiones.
+ */
+static int video_apply_camera_mode(u32 ResolutionIndex)
+{
+    const VideoMode *OutputMode;
+    const VideoMode *CameraMode;
+    int Status;
+
+    if (ResolutionIndex >= VIDEO_MODE_COUNT) {
+        xil_printf("ERROR: invalid camera output mode\r\n");
+        return XST_FAILURE;
+    }
+
+    OutputMode = &VideoModes[ResolutionIndex];
+    CameraMode = &VideoModes[0];
+
+    /*
+     * La camara queda temporalmente frenada mediante el backpressure AXI4-
+     * Stream mientras se detienen y reconfiguran los dos canales de la VDMA.
+     */
+    Status = vdma_stop_and_wait(&Vdma, XAXIVDMA_WRITE);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    Status = vdma_stop_and_wait(&Vdma, XAXIVDMA_READ);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    XVtc_Disable(&Vtc);
+
+    /* El reloj y el VTC describen la resolucion de la salida HDMI. */
+    Status = clock_configure(OutputMode->ClockProfile);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    vtc_configure(&Vtc, OutputMode);
+
+    /* Se descarta cualquier frame perteneciente a la configuracion anterior. */
+    Status = vdma_reset(&Vdma, XAXIVDMA_WRITE);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    Status = vdma_reset(&Vdma, XAXIVDMA_READ);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    /*
+     * La resolucion de la imagen almacenada y leida de DDR sigue siendo la
+     * resolucion nativa VGA de la camara, independientemente de la salida.
+     */
+    Status = vdma_configure_channel(
+        &Vdma,
+        XAXIVDMA_WRITE,
+        CameraMode
+    );
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    Status = vdma_configure_channel(
+        &Vdma,
+        XAXIVDMA_READ,
+        CameraMode
+    );
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    /*
+     * El core conserva esta peticion hasta recibir el TUSER del primer frame
+     * que la VDMA entregue despues de volver a arrancar.
+     */
+    Status = video_scaler_request(ResolutionIndex);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    Status = vdma_start(&Vdma, XAXIVDMA_WRITE);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    Status = vdma_start(&Vdma, XAXIVDMA_READ);
+    if (Status != XST_SUCCESS) {
+        XAxiVdma_DmaStop(&Vdma, XAXIVDMA_WRITE);
+        return XST_FAILURE;
+    }
+
+    XVtc_Enable(&Vtc);
+
+    /*
+     * La VDMA ya puede entregar un TUSER. Se espera a que el escalador
+     * confirme que ha aplicado la nueva configuracion al comienzo del frame.
+     */
+    Status = video_scaler_wait_active(ResolutionIndex);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    CurrentVideoMode = OutputMode;
+
+    xil_printf("Camera video mode active: %s\r\n", OutputMode->Name);
     return XST_SUCCESS;
 }
 
@@ -1142,6 +1367,8 @@ static int source_selector_wait_active(VideoSource Source)
  */
 static int video_apply_source(VideoSource NewSource)
 {
+    const VideoMode *SavedMode;
+    u32 SavedResolutionIndex;
     int Status;
 
     if ((NewSource != VIDEO_SOURCE_TPG) &&
@@ -1149,9 +1376,27 @@ static int video_apply_source(VideoSource NewSource)
         return XST_FAILURE;
     }
 
+    if (NewSource == RequestedVideoSource) {
+        xil_printf("Video source already active\r\n");
+        return XST_SUCCESS;
+    }
+
+    /*
+     * Se conserva el modo de salida solicitado por el usuario. La conmutacion
+     * se realiza temporalmente en VGA, el formato comun a ambas fuentes, y al
+     * final se restaura este modo mediante el camino de la fuente nueva.
+     */
+    SavedMode = (CurrentVideoMode != NULL)
+        ? CurrentVideoMode
+        : &VideoModes[0];
+    SavedResolutionIndex = (u32)(SavedMode - VideoModes);
+
     if (NewSource == VIDEO_SOURCE_CAMERA) {
-        /* La configuracion disponible de la OV7670 es exclusivamente VGA. */
-        if (CurrentVideoMode != &VideoModes[0]) {
+        /*
+         * El TPG y la VDMA pasan primero a VGA. Asi la primera imagen de la
+         * camara tiene las mismas dimensiones que espera la cadena actual.
+         */
+        if (SavedResolutionIndex != 0U) {
             Xil_Out32(TPG_BASEADDR + TPG_ENABLE_OFFSET, 1U);
 
             Status = video_apply_mode(&VideoModes[0]);
@@ -1187,7 +1432,32 @@ static int video_apply_source(VideoSource NewSource)
 
         /* Ya se transmite la camara; el TPG puede terminar y quedar parado. */
         Xil_Out32(TPG_BASEADDR + TPG_ENABLE_OFFSET, 0U);
+
+        /*
+         * Desde este punto la fuente hardware ya es la camara. Se actualiza
+         * el estado software incluso si fallase despues la restauracion del
+         * modo de salida.
+         */
+        RequestedVideoSource = VIDEO_SOURCE_CAMERA;
+
+        if (SavedResolutionIndex != 0U) {
+            Status = video_apply_camera_mode(SavedResolutionIndex);
+            if (Status != XST_SUCCESS) {
+                return XST_FAILURE;
+            }
+        }
     } else {
+        /*
+         * La camara escalada vuelve primero a VGA y deja el escalador en
+         * bypass antes de entregar la cadena al TPG.
+         */
+        if (SavedResolutionIndex != 0U) {
+            Status = video_apply_camera_mode(0U);
+            if (Status != XST_SUCCESS) {
+                return XST_FAILURE;
+            }
+        }
+
         /* El TPG debe estar produciendo antes de que el selector busque su SOF. */
         Xil_Out32(TPG_BASEADDR + TPG_ENABLE_OFFSET, 1U);
         Xil_Out32(
@@ -1200,10 +1470,19 @@ static int video_apply_source(VideoSource NewSource)
             return XST_FAILURE;
         }
 
+        RequestedVideoSource = VIDEO_SOURCE_TPG;
+
         /* La camara se duerme solo despues de dejar de ser la fuente activa. */
         Status = camera_set_enabled(0);
         if (Status != XST_SUCCESS) {
             xil_printf("WARNING: source changed but camera sleep failed\r\n");
+        }
+
+        if (SavedResolutionIndex != 0U) {
+            Status = video_apply_mode(SavedMode);
+            if (Status != XST_SUCCESS) {
+                return XST_FAILURE;
+            }
         }
     }
 
@@ -1355,6 +1634,8 @@ static void print_tpg_status(void)
     u32 FramePhase;
     u32 SourceControl;
     u32 SourceStatus;
+    u32 ScalerControl;
+    u32 ScalerStatus;
 
     Enable = Xil_In32(TPG_BASEADDR + TPG_ENABLE_OFFSET);
     Pattern = Xil_In32(TPG_BASEADDR + TPG_PATTERN_OFFSET);
@@ -1367,6 +1648,12 @@ static void print_tpg_status(void)
     );
     SourceStatus = Xil_In32(
         SOURCE_SELECTOR_BASEADDR + SOURCE_SELECTOR_STATUS_OFFSET
+    );
+    ScalerControl = Xil_In32(
+        VIDEO_SCALER_BASEADDR + VIDEO_SCALER_CONTROL_OFFSET
+    );
+    ScalerStatus = Xil_In32(
+        VIDEO_SCALER_BASEADDR + VIDEO_SCALER_STATUS_OFFSET
     );
 
     if (CurrentVideoMode != NULL) {
@@ -1416,6 +1703,28 @@ static void print_tpg_status(void)
     );
     xil_printf("  camera initialized:    %d\r\n", CameraInitialized);
     xil_printf("  camera enabled:        %d\r\n", CameraEnabled);
+
+    xil_printf("Video scaler status:\r\n");
+    xil_printf(
+        "  requested enable:      %d\r\n",
+        ScalerControl & VIDEO_SCALER_ENABLE_MASK
+    );
+    xil_printf(
+        "  requested resolution:  %d\r\n",
+        (ScalerControl & VIDEO_SCALER_RES_MASK) >> VIDEO_SCALER_RES_SHIFT
+    );
+    xil_printf(
+        "  active enable:         %d\r\n",
+        ScalerStatus & VIDEO_SCALER_ENABLE_MASK
+    );
+    xil_printf(
+        "  active resolution:     %d\r\n",
+        (ScalerStatus & VIDEO_SCALER_RES_MASK) >> VIDEO_SCALER_RES_SHIFT
+    );
+    xil_printf(
+        "  pending:               %d\r\n",
+        (ScalerStatus & VIDEO_SCALER_PENDING_MASK) != 0U
+    );
 }
 
 /*
@@ -1584,15 +1893,15 @@ static void process_command(char *CommandLine)
             }
 
             if (RequestedVideoSource == VIDEO_SOURCE_CAMERA) {
-                xil_printf(
-                    "ERROR: switch to the TPG before changing resolution\r\n"
-                );
-                return;
-            }
-
-            if (video_apply_mode(&VideoModes[(u32)Value]) != XST_SUCCESS) {
-                xil_printf("ERROR: video mode change failed\r\n");
-                return;
+                if (video_apply_camera_mode((u32)Value) != XST_SUCCESS) {
+                    xil_printf("ERROR: camera video mode change failed\r\n");
+                    return;
+                }
+            } else {
+                if (video_apply_mode(&VideoModes[(u32)Value]) != XST_SUCCESS) {
+                    xil_printf("ERROR: TPG video mode change failed\r\n");
+                    return;
+                }
             }
 
             return;
@@ -1632,6 +1941,15 @@ int main(void)
      * VDMA. Si ya habia un frame en curso, el hardware permite que termine.
      */
     Xil_Out32(TPG_BASEADDR + TPG_ENABLE_OFFSET, 0U);
+
+    /*
+     * El estado inicial se solicita tambien desde software para no depender
+     * exclusivamente de los valores de reset del wrapper AXI-Lite.
+     */
+    Status = video_scaler_request(0U);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
 
     Status = vdma_init(&Vdma);
     if (Status != XST_SUCCESS) {
